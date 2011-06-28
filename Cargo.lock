@@ -91,7 +91,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "follower-maze"
+name = "followermaze"
 version = "0.1.0"
 dependencies = [
  "env_logger 0.5.10 (registry+https://github.com/rust-lang/crates.io-index)",

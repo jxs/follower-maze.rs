@@ -1,7 +1,11 @@
 [package]
-name = "follower-maze"
+name = "followermaze"
 version = "0.1.0"
 authors = ["João Oliveira <hello@jxs.pt>"]
+
+[lib]
+name = "followermaze"
+path = "src/lib/mod.rs"
 
 [dependencies]
 # tokio = "0.1.7"

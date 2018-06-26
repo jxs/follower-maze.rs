@@ -1,0 +1,12 @@
+[package]
+name = "follower-maze"
+version = "0.1.0"
+authors = ["João Oliveira <hello@jxs.pt>"]
+
+[dependencies]
+# tokio = "0.1.7"
+tokio = { git = "https://github.com/jxs/tokio.git"}
+futures = "0.1.20"
+
+[profile.release]
+debug = true

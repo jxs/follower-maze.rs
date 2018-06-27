@@ -7,6 +7,8 @@ authors = ["João Oliveira <hello@jxs.pt>"]
 # tokio = "0.1.7"
 tokio = { git = "https://github.com/jxs/tokio.git"}
 futures = "0.1.20"
+log = "0.4.2"
+env_logger = "0.5.10"
 
 [profile.release]
 debug = true

@@ -1,6 +1,8 @@
-extern crate failure;
 extern crate futures;
 extern crate tokio;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::collections::{HashMap, HashSet};
@@ -31,10 +33,17 @@ impl Client {
     }
 
     fn send(&mut self, event: Vec<String>) {
-        self.sender.unbounded_send(event.clone()).expect(&format!(
-            "error sending event: {} to client: {}, receiver not available aborting",
-            event[0], self.id
-        ));
+        self.sender
+            .unbounded_send(event.clone())
+            .unwrap_or_else(|err| {
+                error!(
+                    target: &format!("client: {}", self.id),
+                    "error deliervering event {}: {}",
+                    event.join("|"),
+                    err
+                );
+                panic!()
+            });
     }
 
     fn run(&mut self) -> impl Future<Item = (), Error = ()> {
@@ -45,7 +54,11 @@ impl Client {
 
         receiver.for_each(move |event| {
             let event_str = event.join("|");
-            println!("client: {} - received event: {}", id, event_str);
+            debug!(
+                target: &format!("client: {}", id),
+                "received event: {}",
+                event_str
+            );
             let output = event_str.clone() + "\n";
             let id = id.clone();
 
@@ -56,14 +69,22 @@ impl Client {
             tokio::io::write_all(socket.try_clone().unwrap(), output.as_bytes().to_vec())
                 .wait()
                 .and_then(|_res| {
-                    println!("client: {} - event {} delievered", &id, &event_str);
+                    info!(
+                        target: &format!("client: {}", &id),
+                        "delievered event {}",
+                        &event_str
+                    );
                     Ok(())
                 })
-                .expect(&format!(
-                    "client:{} error delievering event: {}, socket closed, aborting",
-                    event_str.clone(),
-                    id.clone()
-                ));
+                .unwrap_or_else(|err| {
+                    error!(
+                        target: &format!("client: {}", id.clone()),
+                        "error delievering event: {} : {}",
+                        event_str.clone(),
+                        err
+                    );
+                    panic!()
+                });
             Ok(())
         })
     }
@@ -73,11 +94,11 @@ fn events_listener(tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), E
     let addr = "127.0.0.1:9090".parse().unwrap();
     let listener = TcpListener::bind(&addr).unwrap();
 
-    println!("Listening for events source on port 9090");
+    info!(target: "events listener", "Listening for events source on port 9090");
     listener
         .incoming()
         .for_each(move |socket| {
-            println!("events listener: connected");
+            info!(target: "events listener", "connected");
             let event_stream_loop = loop_fn(
                 (1, HashMap::new(), tx.clone(), BufReader::new(socket)),
                 |(mut state, mut events_queue, tx, reader)| {
@@ -87,25 +108,31 @@ fn events_listener(tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), E
                             if event_str.is_empty() {
                                 return Ok(Loop::Break(()));
                             }
-                            // println!("events listener: read event: {}", event_str);
+                            debug!(target: "events listener", "read event: {}", event_str);
                             let event: Vec<String> =
                                 event_str.trim().split('|').map(|x| x.to_string()).collect();
                             let seq: usize = event[0].parse().unwrap();
-                            // println!("events listener: inserted event: {} -- {:?}", seq, event);
+                            trace!(target: "events listener", "inserted event: {} -- {:?}", seq, event);
                             events_queue.insert(seq, event);
                             loop {
                                 match events_queue.get(&state) {
                                     Some(event) => {
-                                        tx.unbounded_send(event.clone()).expect(&format!(
-                                            "events listener: error sending event: {} aborting",
-                                            event_str
-                                        ));
+                                        tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
+                                            error!(target:
+                                            "events listener", "error sending event: {} : {}",
+                                                   event_str,
+                                                   err
+                                            );
+                                            panic!()
+                                        });
                                         state += 1;
-                                        // println!(
-                                        //     "events listener: sent event : {}, state: {}",
-                                        //     event.join("|"),
-                                        //     state
-                                        // );
+
+                                        debug!(
+                                            target: "events listener",
+                                            "sent event : {}, state: {}",
+                                            event.join("|"),
+                                            state
+                                        );
                                     }
                                     None => {
                                         break;
@@ -116,7 +143,7 @@ fn events_listener(tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), E
                             Ok(Loop::Continue((state, events_queue, tx, reader)))
                         })
                         .map_err(|err| {
-                            println!("server error {:?}", err);
+                            error!(target:"events listener", "error {:?}", err);
                         })
                 },
             );
@@ -124,7 +151,7 @@ fn events_listener(tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), E
             Ok(())
         })
         .map_err(|err| {
-            println!("server error {:?}", err);
+            error!(target:"events listener", "error {:?}", err);
         })
 }
 
@@ -134,7 +161,7 @@ fn clients_listener(
     let addr = "127.0.0.1:9099".parse().unwrap();
     let listener = TcpListener::bind(&addr).unwrap();
 
-    println!("Listening for clients on port 9099");
+    info!(target: "clients listener", "Listening for clients on port 9099");
     listener
         .incoming()
         .for_each(move |socket| {
@@ -144,7 +171,7 @@ fn clients_listener(
             let reader = BufReader::new(socket.try_clone().unwrap());
             let futu = tokio::io::read_until(reader, b'\n', events)
                 .map_err(|err| {
-                    println!("server error {:?}", err);
+                    error!(target:"clients listener", "error {:?}", err);
                 })
                 .and_then(move |(_bfsocket, bclient)| {
                     let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
@@ -160,7 +187,7 @@ fn clients_listener(
             Ok(())
         })
         .map_err(|err| {
-            println!("server error {:?}", err);
+            error!(target:"clients listener", "error {:?}", err);
         })
 }
 
@@ -180,8 +207,8 @@ fn events_handler(
                     Some(client) => {
                         client.send(event.clone());
                     }
-                    _ => println!(
-                        "events handler: skipping event {}, client {} not found",
+                    _ => debug!(
+                        target: "events handler", "skipping event {}, client {} not found",
                         event_str, client_id
                     ),
                 }
@@ -197,11 +224,12 @@ fn events_handler(
                     }
                     _ => {
                         let mut followers = followers.write().unwrap();
-                        let followers = followers.entry(client_id.clone()).or_insert(HashSet::new());
+                        let followers =
+                            followers.entry(client_id.clone()).or_insert(HashSet::new());
                         followers.insert(event[2].clone());
 
-                        println!(
-                        "events handler: skipping event {}, client {} not found, but adding to its follower list",
+                        debug!(
+                        target: "events handler", "skipping event {}, client {} not found, but adding to its follower list",
                         event_str, client_id
                         )
                     }
@@ -215,8 +243,8 @@ fn events_handler(
                     Some(followers) => {
                         followers.retain(|follower_id| follower_id != unfollower_id);
                     }
-                    None => println!(
-                        "events handler: skipping unfollow, client: {} isn't followed by {}",
+                    None => debug!(
+                        target: "events handler", "skipping unfollow, client: {} isn't followed by {}",
                         client_id, unfollower_id
                     ),
                 }
@@ -234,21 +262,21 @@ fn events_handler(
                 let followers = match followers.get(&client_id) {
                     Some(followers) => followers,
                     None => {
-                        println!(
-                            "events handler: skipping sending event {}, client:{} not found",
+                        debug!(
+                            target: "events handler", "skipping sending event {}, client:{} not found",
                             event_str, client_id
                         );
                         return Ok(());
                     }
                 };
 
-                println!("client: {} followers: {:?}", client_id, followers);
+                trace!(target: "events handler", "client: {} followers: {:?}", client_id, followers);
                 for follower_id in followers.iter() {
                     match clients.get_mut(follower_id) {
                         Some(follower) => follower.send(event.clone()),
                         None => {
-                            println!(
-                                "events handler: skipping sending event {}, follower:{} not found",
+                            debug!(
+                                target: "events handler", "skipping sending event {}, follower:{} not found",
                                 event_str, follower_id
                             );
                             continue;
@@ -263,12 +291,17 @@ fn events_handler(
 }
 
 fn main() {
+    env_logger::init();
+
     let (tx, rx) = unbounded();
     let mut rt = Runtime::new().unwrap();
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
 
+    info!("Starting Follower Maze");
+
     rt.spawn(events_listener(tx));
     rt.spawn(clients_listener(clients.clone()));
     rt.spawn(events_handler(rx, clients));
+
     rt.shutdown_on_idle().wait().unwrap();
 }

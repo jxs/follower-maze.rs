@@ -7,10 +7,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::{Future, Stream};
 
 pub struct Client {
-    id: String,
-    socket: TcpStream,
-    sender: UnboundedSender<Vec<String>>,
-    receiver: Option<UnboundedReceiver<Vec<String>>>,
+    pub id: String,
+    pub socket: TcpStream,
+    pub sender: UnboundedSender<Vec<String>>,
+    pub receiver: Option<UnboundedReceiver<Vec<String>>>,
 }
 
 impl Client {
@@ -29,9 +29,9 @@ impl Client {
             .unbounded_send(event.clone())
             .unwrap_or_else(|err| {
                 error!(
-                    target: &format!("client: {}", self.id),
-                    "error deliervering event {}: {}",
+                    "error deliervering event {} to client {},  {}",
                     event.join("|"),
+                    self.id,
                     err
                 );
                 panic!()
@@ -46,11 +46,7 @@ impl Client {
 
         receiver.for_each(move |event| {
             let event_str = event.join("|");
-            debug!(
-                target: &format!("client: {}", id),
-                "received event: {}",
-                event_str
-            );
+            debug!("client {} received event: {}", id, event_str);
             let output = event_str.clone() + "\n";
             let id = id.clone();
 
@@ -61,17 +57,13 @@ impl Client {
             tokio::io::write_all(socket.try_clone().unwrap(), output.as_bytes().to_vec())
                 .wait()
                 .and_then(|_res| {
-                    info!(
-                        target: &format!("client: {}", &id),
-                        "delievered event {}",
-                        &event_str
-                    );
+                    info!("client {} delievered event {}", &id, &event_str);
                     Ok(())
                 })
                 .unwrap_or_else(|err| {
                     error!(
-                        target: &format!("client: {}", id.clone()),
-                        "error delievering event: {} : {}",
+                        "client {}, error delievering event: {} : {}",
+                        id.clone(),
                         event_str.clone(),
                         err
                     );
@@ -89,7 +81,7 @@ pub fn listen(
     let addrf = addr.parse().unwrap();
     let listener = TcpListener::bind(&addrf).unwrap();
 
-    info!(target: "clients listener", "Listening for clients on {}", addr);
+    info!("clients listener Listening for clients on {}", addr);
     listener
         .incoming()
         .for_each(move |socket| {
@@ -99,11 +91,11 @@ pub fn listen(
             let reader = BufReader::new(socket.try_clone().unwrap());
             let futu = tokio::io::read_until(reader, b'\n', events)
                 .map_err(|err| {
-                    error!(target:"clients listener", "error {:?}", err);
+                    error!("clients listener, error {:?}", err);
                 })
                 .and_then(move |(_bfsocket, bclient)| {
                     let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
-                    debug!(target: "clients listener", "client connected: {:?}", client_id);
+                    debug!("clients listener client connected: {:?}", client_id);
                     let mut client = Client::new(client_id.clone(), socket);
                     tokio::spawn(client.run());
                     let mut clients_rw = clients.write().unwrap();
@@ -115,6 +107,6 @@ pub fn listen(
             Ok(())
         })
         .map_err(|err| {
-            error!(target:"clients listener", "error {:?}", err);
+            error!("clients listener, error {:?}", err);
         })
 }

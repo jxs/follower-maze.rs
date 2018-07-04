@@ -3,7 +3,7 @@ extern crate followermaze;
 extern crate futures;
 extern crate tokio;
 
-use followermaze::{events, client::Client};
+use followermaze::{client::Client, events};
 use futures::sync::mpsc::unbounded;
 use futures::Future;
 use std::collections::HashMap;
@@ -67,11 +67,12 @@ fn events_listener_accepts_event_parses_and_sends_ordered_through_channel() {
     rt.block_on(test).unwrap();
 }
 
-
 fn start_get_socket() -> TcpStream {
     let addr = "127.0.0.1:0".parse().unwrap();
     let listener = TcpListener::bind(&addr).unwrap();
-    TcpStream::connect(&listener.local_addr().unwrap()).wait().unwrap()
+    TcpStream::connect(&listener.local_addr().unwrap())
+        .wait()
+        .unwrap()
 }
 
 fn seed_clients(socket: TcpStream, clients: Arc<RwLock<HashMap<String, Client>>>) {
@@ -86,7 +87,6 @@ fn seed_clients(socket: TcpStream, clients: Arc<RwLock<HashMap<String, Client>>>
     clients_rw.insert("134".to_string(), client4);
 }
 
-
 #[test]
 fn events_handler_sends_broadcast_event_to_all_clients() {
     let socket = start_get_socket();
@@ -95,9 +95,9 @@ fn events_handler_sends_broadcast_event_to_all_clients() {
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
     seed_clients(socket, clients.clone());
 
-
     let (tx, rx) = unbounded();
-    tx.unbounded_send(vec!["17".to_string(), "B".to_string()]).unwrap();
+    tx.unbounded_send(vec!["17".to_string(), "B".to_string()])
+        .unwrap();
 
     rt.spawn(events::handle(rx, clients.clone()));
 
@@ -123,7 +123,12 @@ fn events_handler_sends_private_message_to_matching_client() {
     seed_clients(socket, clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
-    tx.unbounded_send(vec!["15".to_string(), "P".to_string(), "46".to_string(), "184".to_string()]).unwrap();
+    tx.unbounded_send(vec![
+        "15".to_string(),
+        "P".to_string(),
+        "46".to_string(),
+        "184".to_string(),
+    ]).unwrap();
 
     // wait to allow for events::handle to aquire write lock
     thread::sleep(time::Duration::from_millis(10));
@@ -133,9 +138,16 @@ fn events_handler_sends_private_message_to_matching_client() {
     let receiver = client.receiver.take().unwrap();
     let mut events = receiver.take(1).collect().wait().unwrap().into_iter();
     let event = events.next().unwrap();
-    assert_eq!(vec!["15".to_string(), "P".to_string(), "46".to_string(), "184".to_string()], event);
+    assert_eq!(
+        vec![
+            "15".to_string(),
+            "P".to_string(),
+            "46".to_string(),
+            "184".to_string(),
+        ],
+        event
+    );
 }
-
 
 #[test]
 fn events_handler_sends_status_update_message_to_matching_client_after_follow() {
@@ -147,9 +159,20 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
     seed_clients(socket, clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
-    tx.unbounded_send(vec!["15".to_string(), "F".to_string(), "134".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["17".to_string(), "F".to_string(), "354".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()]).unwrap();
+    tx.unbounded_send(vec![
+        "15".to_string(),
+        "F".to_string(),
+        "134".to_string(),
+        "184".to_string(),
+    ]).unwrap();
+    tx.unbounded_send(vec![
+        "17".to_string(),
+        "F".to_string(),
+        "354".to_string(),
+        "184".to_string(),
+    ]).unwrap();
+    tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()])
+        .unwrap();
 
     // wait to allow for events::handle to aquire write lock
     thread::sleep(time::Duration::from_millis(10));
@@ -161,9 +184,25 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
         let receiver = client184.receiver.take().unwrap();
         let mut events = receiver.take(2).collect().wait().unwrap().into_iter();
         let event = events.next().unwrap();
-        assert_eq!(vec!["15".to_string(), "F".to_string(), "134".to_string(), "184".to_string()], event);
+        assert_eq!(
+            vec![
+                "15".to_string(),
+                "F".to_string(),
+                "134".to_string(),
+                "184".to_string(),
+            ],
+            event
+        );
         let event = events.next().unwrap();
-        assert_eq!(vec!["17".to_string(), "F".to_string(), "354".to_string(), "184".to_string()], event);
+        assert_eq!(
+            vec![
+                "17".to_string(),
+                "F".to_string(),
+                "354".to_string(),
+                "184".to_string(),
+            ],
+            event
+        );
     }
 
     {
@@ -171,16 +210,21 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
         let receiver = client134.receiver.take().unwrap();
         let mut events = receiver.take(1).collect().wait().unwrap().into_iter();
         let event = events.next().unwrap();
-        assert_eq!(vec!["18".to_string(), "S".to_string(), "184".to_string()], event);
+        assert_eq!(
+            vec!["18".to_string(), "S".to_string(), "184".to_string()],
+            event
+        );
     }
 
     let client354 = clients_rw.get_mut("354").unwrap();
     let receiver = client354.receiver.take().unwrap();
     let mut events = receiver.take(1).collect().wait().unwrap().into_iter();
     let event = events.next().unwrap();
-    assert_eq!(vec!["18".to_string(), "S".to_string(), "184".to_string()], event);
+    assert_eq!(
+        vec!["18".to_string(), "S".to_string(), "184".to_string()],
+        event
+    );
 }
-
 
 #[test]
 fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unfollow() {
@@ -192,11 +236,24 @@ fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unf
     seed_clients(socket, clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
-    tx.unbounded_send(vec!["15".to_string(), "F".to_string(), "354".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["25".to_string(), "U".to_string(), "354".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["28".to_string(), "S".to_string(), "184".to_string()]).unwrap();
-    tx.unbounded_send(vec!["30".to_string(), "B".to_string()]).unwrap();
+    tx.unbounded_send(vec![
+        "15".to_string(),
+        "F".to_string(),
+        "354".to_string(),
+        "184".to_string(),
+    ]).unwrap();
+    tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()])
+        .unwrap();
+    tx.unbounded_send(vec![
+        "25".to_string(),
+        "U".to_string(),
+        "354".to_string(),
+        "184".to_string(),
+    ]).unwrap();
+    tx.unbounded_send(vec!["28".to_string(), "S".to_string(), "184".to_string()])
+        .unwrap();
+    tx.unbounded_send(vec!["30".to_string(), "B".to_string()])
+        .unwrap();
 
     // wait to allow for events::handle to aquire write lock
     thread::sleep(time::Duration::from_millis(10));
@@ -207,8 +264,10 @@ fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unf
     let receiver = client354.receiver.take().unwrap();
     let mut events = receiver.take(2).collect().wait().unwrap().into_iter();
     let event = events.next().unwrap();
-    assert_eq!(vec!["18".to_string(), "S".to_string(), "184".to_string()], event);
+    assert_eq!(
+        vec!["18".to_string(), "S".to_string(), "184".to_string()],
+        event
+    );
     let event = events.next().unwrap();
     assert_eq!(vec!["30".to_string(), "B".to_string()], event);
-
 }

@@ -50,26 +50,32 @@ impl Client {
             let output = event_str.clone() + "\n";
             let id = id.clone();
 
-            if event[1].as_str() == "U" {
-                return Ok(());
-            }
-
             tokio::io::write_all(socket.try_clone().unwrap(), output.as_bytes().to_vec())
-                .wait()
-                .and_then(|_res| {
-                    info!("client {} delievered event {}", &id, &event_str);
-                    Ok(())
+                .and_then({
+                    let id = id.clone();
+                    let event_str = event_str.clone();
+                    move |_res| {
+                        info!(
+                            "client {} delievered event {}",
+                            id.clone(),
+                            event_str.clone()
+                        );
+                        Ok(())
+                    }
                 })
-                .unwrap_or_else(|err| {
-                    error!(
-                        "client {}, error delievering event: {} : {}",
-                        id.clone(),
-                        event_str.clone(),
-                        err
-                    );
-                    panic!()
-                });
-            Ok(())
+                .map_err({
+                    let id = id.clone();
+                    let event_str = event_str.clone();
+                    move |err| {
+                        error!(
+                            "client {} error delivering event {} {:?}",
+                            id.clone(),
+                            event_str.clone(),
+                            err
+                        );
+                        panic!();
+                    }
+                })
         })
     }
 }

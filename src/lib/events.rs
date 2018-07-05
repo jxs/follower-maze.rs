@@ -18,11 +18,11 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
         .incoming()
         .for_each(move |socket| {
             info!("events listener connected");
-            let event_stream_loop = loop_fn(
+            loop_fn(
                 (1, HashMap::new(), tx.clone(), BufReader::new(socket)),
                 |(mut state, mut events_queue, tx, reader)| {
-                    tokio::io::read_until(reader, b'\n', Vec::new())
-                        .and_then(move |(reader, raw_event)| {
+                    tokio::io::read_until(reader, b'\n', Vec::new()).and_then(
+                        move |(reader, raw_event)| {
                             let event_str = match String::from_utf8(raw_event) {
                                 Ok(string) => string,
                                 Err(err) => {
@@ -70,14 +70,10 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
                             }
 
                             Ok(Loop::Continue((state, events_queue, tx, reader)))
-                        })
-                        .map_err(|err| {
-                            error!("events listener error {:?}", err);
-                        })
+                        },
+                    )
                 },
-            );
-            tokio::spawn(event_stream_loop);
-            Ok(())
+            )
         })
         .map_err(|err| {
             error!("events listener error {:?}", err);

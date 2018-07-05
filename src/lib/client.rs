@@ -95,22 +95,15 @@ pub fn listen(
             let clients = Arc::clone(&clients);
             let events = Vec::new();
             let reader = BufReader::new(socket.try_clone().unwrap());
-            let futu = tokio::io::read_until(reader, b'\n', events)
-                .map_err(|err| {
-                    error!("clients listener, error {:?}", err);
-                })
-                .and_then(move |(_bfsocket, bclient)| {
-                    let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
-                    debug!("clients listener client connected: {:?}", client_id);
-                    let mut client = Client::new(client_id.clone(), socket);
-                    tokio::spawn(client.run());
-                    let mut clients_rw = clients.write().unwrap();
-                    clients_rw.insert(client_id, client);
-                    Ok(())
-                });
-
-            tokio::spawn(futu);
-            Ok(())
+            tokio::io::read_until(reader, b'\n', events).and_then(move |(_bfsocket, bclient)| {
+                let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
+                debug!("clients listener client connected: {:?}", client_id);
+                let mut client = Client::new(client_id.clone(), socket);
+                tokio::spawn(client.run());
+                let mut clients_rw = clients.write().unwrap();
+                clients_rw.insert(client_id, client);
+                Ok(())
+            })
         })
         .map_err(|err| {
             error!("clients listener, error {:?}", err);

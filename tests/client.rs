@@ -4,7 +4,7 @@ extern crate futures;
 extern crate tokio;
 
 use followermaze::{client, client::Client};
-use futures::{future::lazy, Future};
+use futures::Future;
 use std::collections::HashMap;
 use std::{
     sync::{Arc, RwLock}, thread, time,
@@ -56,7 +56,7 @@ fn socket_receives_client_events() {
         .map_err(|err| {
             panic!("{:?}", err);
         });
-    rt.block_on(test);
+    rt.block_on(test).unwrap();
 }
 
 #[test]

@@ -46,7 +46,7 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
                             trace!("events listener inserted event: {} -- {:?}", seq, event);
                             events_queue.insert(seq, event);
                             loop {
-                                match events_queue.get(&state) {
+                                match events_queue.remove(&state) {
                                     Some(event) => {
                                         tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
                                             error!(

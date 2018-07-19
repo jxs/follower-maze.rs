@@ -17,25 +17,22 @@ impl Client {
     pub fn new(id: String, socket: TcpStream) -> Client {
         let (sender, receiver) = unbounded();
         Client {
-            id: id,
-            socket: socket,
-            sender: sender,
+            id,
+            socket,
+            sender,
             receiver: Some(receiver),
         }
     }
 
     pub fn send(&self, event: Vec<String>) {
-        self.sender
-            .unbounded_send(event.clone())
-            .unwrap_or_else(|err| {
-                error!(
-                    "error deliervering event {} to client {},  {}",
-                    event.join("|"),
-                    self.id,
-                    err
-                );
-                panic!()
-            });
+        let event_str = event.join("|");
+        self.sender.unbounded_send(event).unwrap_or_else(|err| {
+            error!(
+                "error deliervering event {} to client {},  {}",
+                event_str, self.id, err
+            );
+            panic!()
+        });
     }
 
     pub fn run(&mut self) -> impl Future<Item = (), Error = ()> {
@@ -80,9 +77,9 @@ impl Client {
     }
 }
 
-pub fn listen(
+pub fn listen<S: ::std::hash::BuildHasher>(
     addr: &str,
-    clients: Arc<RwLock<HashMap<String, Client>>>,
+    clients: Arc<RwLock<HashMap<String, Client, S>>>,
 ) -> impl Future<Item = (), Error = ()> {
     let addrf = addr.parse().unwrap();
     let listener = TcpListener::bind(&addrf).unwrap();

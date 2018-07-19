@@ -45,28 +45,21 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
                             };
                             trace!("events listener inserted event: {} -- {:?}", seq, event);
                             events_queue.insert(seq, event);
-                            loop {
-                                match events_queue.remove(&state) {
-                                    Some(event) => {
-                                        tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
-                                            error!(
-                                                "events listener error sending event: {} : {}",
-                                                event_str, err
-                                            );
-                                            panic!()
-                                        });
-                                        state += 1;
+                            while let Some(event) = events_queue.remove(&state) {
+                                tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
+                                    error!(
+                                        "events listener error sending event: {} : {}",
+                                        event_str, err
+                                    );
+                                    panic!()
+                                });
+                                state += 1;
 
-                                        debug!(
-                                            "events listener sent event : {}, state: {}",
-                                            event.join("|"),
-                                            state
-                                        );
-                                    }
-                                    None => {
-                                        break;
-                                    }
-                                };
+                                debug!(
+                                    "events listener sent event : {}, state: {}",
+                                    event.join("|"),
+                                    state
+                                );
                             }
 
                             Ok(Loop::Continue((state, events_queue, tx, reader)))
@@ -80,9 +73,9 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
         })
 }
 
-pub fn handle(
+pub fn handle<S: ::std::hash::BuildHasher>(
     tx: UnboundedReceiver<Vec<String>>,
-    clients: Arc<RwLock<HashMap<String, Client>>>,
+    clients: Arc<RwLock<HashMap<String, Client, S>>>,
 ) -> impl Future<Item = (), Error = ()> {
     let followers: Arc<RwLock<HashMap<String, HashSet<String>>>> =
         Arc::new(RwLock::new(HashMap::new()));
@@ -109,14 +102,15 @@ pub fn handle(
                 match clients.get_mut(&client_id) {
                     Some(client) => {
                         let mut followers = followers.write().unwrap();
-                        let followers = followers.entry(client_id).or_insert(HashSet::new());
+                        let followers = followers.entry(client_id).or_insert_with(HashSet::new);
                         followers.insert(event[2].clone());
                         client.send(event.clone());
                     }
                     _ => {
                         let mut followers = followers.write().unwrap();
-                        let followers =
-                            followers.entry(client_id.clone()).or_insert(HashSet::new());
+                        let followers = followers
+                            .entry(client_id.clone())
+                            .or_insert_with(HashSet::new);
                         followers.insert(event[2].clone());
 
                         debug!(

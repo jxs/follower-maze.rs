@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use tokio;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::{Future, Stream};
+use log::{log, debug, error, info};
 
 pub struct Client {
     pub id: String,

@@ -1,6 +1,5 @@
 extern crate futures;
 extern crate tokio;
-#[macro_use]
 extern crate log;
 extern crate env_logger;
 extern crate followermaze;
@@ -11,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::prelude::Future;
 use tokio::runtime::Runtime;
+use log::log;
+use log::info;
 
 fn main() {
     env_logger::init();

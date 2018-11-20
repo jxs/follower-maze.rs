@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 use tokio::prelude::{
     future::{loop_fn, Loop}, Future, Stream,
 };
+use log::{log, debug, error, info, trace};
 
 pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), Error = ()> {
     let addr = addr.parse().unwrap();

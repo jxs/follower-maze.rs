@@ -1,9 +1,3 @@
-extern crate futures;
-extern crate tokio;
-extern crate log;
-extern crate env_logger;
-extern crate followermaze;
-
 use followermaze::{client, client::Client, events};
 use futures::sync::mpsc::unbounded;
 use std::collections::HashMap;

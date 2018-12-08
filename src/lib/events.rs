@@ -1,4 +1,4 @@
-use client::Client;
+use crate::client::Client;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;

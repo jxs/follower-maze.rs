@@ -2,6 +2,7 @@
 name = "followermaze"
 version = "0.1.0"
 authors = ["João Oliveira <hello@jxs.pt>"]
+edition = "2018"
 
 [lib]
 name = "followermaze"

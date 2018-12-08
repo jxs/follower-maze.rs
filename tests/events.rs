@@ -1,8 +1,3 @@
-extern crate env_logger;
-extern crate followermaze;
-extern crate futures;
-extern crate tokio;
-
 use followermaze::{client::Client, events};
 use futures::sync::mpsc::unbounded;
 use futures::Future;

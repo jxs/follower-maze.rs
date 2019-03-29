@@ -1,25 +1,28 @@
+use bytes::Bytes;
+use futures::sink::Sink;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
-use tokio;
+use tokio::codec::{BytesCodec, FramedWrite};
+use tokio::io::{AsyncRead, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::{Future, Stream};
-use log::{log, debug, error, info};
 
 pub struct Client {
     pub id: String,
-    pub socket: TcpStream,
+    pub socket: Option<WriteHalf<TcpStream>>,
     pub sender: UnboundedSender<Vec<String>>,
     pub receiver: Option<UnboundedReceiver<Vec<String>>>,
 }
 
 impl Client {
-    pub fn new(id: String, socket: TcpStream) -> Client {
+    pub fn new(id: String, socket: WriteHalf<TcpStream>) -> Client {
         let (sender, receiver) = unbounded();
         Client {
             id,
-            socket,
+            socket: Some(socket),
             sender,
             receiver: Some(receiver),
         }
@@ -38,42 +41,42 @@ impl Client {
 
     pub fn run(&mut self) -> impl Future<Item = (), Error = ()> {
         let id = self.id.clone();
-        let socket = self.socket.try_clone().unwrap();
-        let receiver = self.receiver.take();
-        let receiver = receiver.expect("run can only be called once");
 
-        receiver.for_each(move |event| {
-            let event_str = event.join("|");
-            debug!("client {} received event: {}", id, event_str);
-            let output = event_str.clone() + "\n";
+        let socket = self.socket.take().expect("run can only be called once");
+        let receiver = self.receiver.take().expect("run can only be called once");
+
+        let messages_stream = receiver
+            .map({
+                move |event| {
+                    let event_str = event.join("|");
+                    let output = event_str.clone() + "\n";
+                    Bytes::from(output)
+                }
+            })
+            .inspect({
+                let id = id.clone();
+                move |event| {
+                    info!(
+                        "client {} received event: {}",
+                        id,
+                        String::from_utf8(event.to_vec()).unwrap()
+                    );
+                }
+            });
+
+        let framed = FramedWrite::new(socket, BytesCodec::new()).sink_map_err(|_err| ());
+        framed.send_all(messages_stream).map(|_out| ()).map_err({
             let id = id.clone();
-
-            tokio::io::write_all(socket.try_clone().unwrap(), output.as_bytes().to_vec())
-                .and_then({
-                    let id = id.clone();
-                    let event_str = event_str.clone();
-                    move |_res| {
-                        info!(
-                            "client {} delievered event {}",
-                            id.clone(),
-                            event_str.clone()
-                        );
-                        Ok(())
-                    }
-                })
-                .map_err({
-                    let id = id.clone();
-                    let event_str = event_str.clone();
-                    move |err| {
-                        error!(
-                            "client {} error delivering event {} {:?}",
-                            id.clone(),
-                            event_str.clone(),
-                            err
-                        );
-                        panic!();
-                    }
-                })
+            //TODO ATTACH THE EVENT THAT FAILED
+            move |err| {
+                error!(
+                    "client {} error delivering event {} {:?}",
+                    id.clone(),
+                    "FAILED EVENT",
+                    err
+                );
+                panic!();
+            }
         })
     }
 }
@@ -92,11 +95,12 @@ pub fn listen<S: ::std::hash::BuildHasher>(
             //move clients to this closure
             let clients = Arc::clone(&clients);
             let events = Vec::new();
-            let reader = BufReader::new(socket.try_clone().unwrap());
+            let (reader, writer) = socket.split();
+            let reader = BufReader::new(reader);
             tokio::io::read_until(reader, b'\n', events).and_then(move |(_bfsocket, bclient)| {
                 let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
                 debug!("clients listener client connected: {:?}", client_id);
-                let mut client = Client::new(client_id.clone(), socket);
+                let mut client = Client::new(client_id.clone(), writer);
                 tokio::spawn(client.run());
                 let mut clients_rw = clients.write().unwrap();
                 clients_rw.insert(client_id, client);

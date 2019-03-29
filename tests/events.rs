@@ -3,8 +3,10 @@ use futures::sync::mpsc::unbounded;
 use futures::Future;
 use std::collections::HashMap;
 use std::{
-    sync::{Arc, RwLock}, thread, time,
+    sync::{Arc, RwLock},
+    thread, time,
 };
+use tokio::io::AsyncRead;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::Stream;
 use tokio::runtime::Runtime;
@@ -22,18 +24,19 @@ fn events_listener_accepts_event_parses_and_sends_ordered_through_channel() {
 
     let event_send = stream
         .and_then(|socket| {
-            println!("SOCKET: {:?}", socket);
-            tokio::io::write_all(socket.try_clone().unwrap(), "3|F|46|74\n".as_bytes())
+            tokio::io::write_all(socket, "3|F|46|74\n".as_bytes())
+                .and_then(|(socket, _buf)| tokio::io::write_all(socket, "2|S|46\n".as_bytes()))
+                .and_then(|(socket, _buf)| tokio::io::write_all(socket, "1|B\n".as_bytes()))
                 .wait()
                 .unwrap();
 
-            tokio::io::write_all(socket.try_clone().unwrap(), "2|S|46\n".as_bytes())
-                .wait()
-                .unwrap();
+            // tokio::io::write_all(socket.try_clone().unwrap(), "2|S|46\n".as_bytes())
+            //     .wait()
+            //     .unwrap();
 
-            tokio::io::write_all(socket.try_clone().unwrap(), "1|B\n".as_bytes())
-                .wait()
-                .unwrap();
+            // tokio::io::write_all(socket.try_clone().unwrap(), "1|B\n".as_bytes())
+            //     .wait()
+            //     .unwrap();
 
             Ok(())
         })
@@ -70,25 +73,24 @@ fn start_get_socket() -> TcpStream {
         .unwrap()
 }
 
-fn seed_clients(socket: TcpStream, clients: Arc<RwLock<HashMap<String, Client>>>) {
+fn seed_clients(clients: Arc<RwLock<HashMap<String, Client>>>) {
     let mut clients_rw = clients.write().unwrap();
-    let client1 = Client::new("354".to_string(), socket.try_clone().unwrap());
+    let client1 = Client::new("354".to_string(), start_get_socket().split().1);
     clients_rw.insert("354".to_string(), client1);
-    let client2 = Client::new("274".to_string(), socket.try_clone().unwrap());
+    let client2 = Client::new("274".to_string(), start_get_socket().split().1);
     clients_rw.insert("274".to_string(), client2);
-    let client3 = Client::new("184".to_string(), socket.try_clone().unwrap());
+    let client3 = Client::new("184".to_string(), start_get_socket().split().1);
     clients_rw.insert("184".to_string(), client3);
-    let client4 = Client::new("134".to_string(), socket.try_clone().unwrap());
+    let client4 = Client::new("134".to_string(), start_get_socket().split().1);
     clients_rw.insert("134".to_string(), client4);
 }
 
 #[test]
 fn events_handler_sends_broadcast_event_to_all_clients() {
-    let socket = start_get_socket();
     let mut rt = Runtime::new().unwrap();
 
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
-    seed_clients(socket, clients.clone());
+    seed_clients(clients.clone());
 
     let (tx, rx) = unbounded();
     tx.unbounded_send(vec!["17".to_string(), "B".to_string()])
@@ -110,12 +112,11 @@ fn events_handler_sends_broadcast_event_to_all_clients() {
 
 #[test]
 fn events_handler_sends_private_message_to_matching_client() {
-    let socket = start_get_socket();
     let mut rt = Runtime::new().unwrap();
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
     let (tx, rx) = unbounded();
 
-    seed_clients(socket, clients.clone());
+    seed_clients(clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
     tx.unbounded_send(vec![
@@ -123,7 +124,8 @@ fn events_handler_sends_private_message_to_matching_client() {
         "P".to_string(),
         "46".to_string(),
         "184".to_string(),
-    ]).unwrap();
+    ])
+    .unwrap();
 
     // wait to allow for events::handle to aquire write lock
     thread::sleep(time::Duration::from_millis(10));
@@ -146,12 +148,11 @@ fn events_handler_sends_private_message_to_matching_client() {
 
 #[test]
 fn events_handler_sends_status_update_message_to_matching_client_after_follow() {
-    let socket = start_get_socket();
     let mut rt = Runtime::new().unwrap();
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
     let (tx, rx) = unbounded();
 
-    seed_clients(socket, clients.clone());
+    seed_clients(clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
     tx.unbounded_send(vec![
@@ -159,13 +160,15 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
         "F".to_string(),
         "134".to_string(),
         "184".to_string(),
-    ]).unwrap();
+    ])
+    .unwrap();
     tx.unbounded_send(vec![
         "17".to_string(),
         "F".to_string(),
         "354".to_string(),
         "184".to_string(),
-    ]).unwrap();
+    ])
+    .unwrap();
     tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()])
         .unwrap();
 
@@ -223,12 +226,11 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
 
 #[test]
 fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unfollow() {
-    let socket = start_get_socket();
     let mut rt = Runtime::new().unwrap();
     let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
     let (tx, rx) = unbounded();
 
-    seed_clients(socket, clients.clone());
+    seed_clients(clients.clone());
 
     rt.spawn(events::handle(rx, clients.clone()));
     tx.unbounded_send(vec![
@@ -236,7 +238,8 @@ fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unf
         "F".to_string(),
         "354".to_string(),
         "184".to_string(),
-    ]).unwrap();
+    ])
+    .unwrap();
     tx.unbounded_send(vec!["18".to_string(), "S".to_string(), "184".to_string()])
         .unwrap();
     tx.unbounded_send(vec![
@@ -244,7 +247,8 @@ fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unf
         "U".to_string(),
         "354".to_string(),
         "184".to_string(),
-    ]).unwrap();
+    ])
+    .unwrap();
     tx.unbounded_send(vec!["28".to_string(), "S".to_string(), "184".to_string()])
         .unwrap();
     tx.unbounded_send(vec!["30".to_string(), "B".to_string()])

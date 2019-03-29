@@ -1,23 +1,28 @@
 use crate::client::Client;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
 use tokio;
 use tokio::net::TcpListener;
 use tokio::prelude::{
-    future::{loop_fn, Loop}, Future, Stream,
+    future::{loop_fn, Loop},
+    Future, Stream,
 };
-use log::{log, debug, error, info, trace};
 
 pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), Error = ()> {
     let addr = addr.parse().unwrap();
     let listener = TcpListener::bind(&addr).unwrap();
 
     info!("events listener Listening for events source on {}", addr);
-    listener
+    let events_source = listener
         .incoming()
-        .for_each(move |socket| {
+        .take(1)
+        .collect()
+        .map(|mut v| v.pop().unwrap());
+    events_source
+        .and_then(move |socket| {
             info!("events listener connected");
             loop_fn(
                 (1, HashMap::new(), tx.clone(), BufReader::new(socket)),
@@ -115,8 +120,8 @@ pub fn handle<S: ::std::hash::BuildHasher>(
                         followers.insert(event[2].clone());
 
                         debug!(
-                        "events handler skipping event {}, client {} not found, but adding to its follower list",
-                        event_str, client_id
+                            "events handler skipping event {}, client {} not found, but adding to its follower list",
+                            event_str, client_id
                         )
                     }
                 }

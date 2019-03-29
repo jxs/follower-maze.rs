@@ -2,8 +2,10 @@ use followermaze::{client, client::Client};
 use futures::Future;
 use std::collections::HashMap;
 use std::{
-    sync::{Arc, RwLock}, thread, time,
+    sync::{Arc, RwLock},
+    thread, time,
 };
+use tokio::io::AsyncRead;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::Stream;
 use tokio::runtime::Runtime;
@@ -22,7 +24,8 @@ fn socket_receives_client_events() {
         .collect()
         .and_then(|sockets| {
             let socket = sockets.into_iter().next().unwrap();
-            let mut client = Client::new("354".to_string(), socket.try_clone().unwrap());
+            let write_half = socket.split().1;
+            let mut client = Client::new("354".to_string(), write_half);
             let sent_event = "911|P|46|68"
                 .to_string()
                 .split("|")
@@ -62,7 +65,7 @@ fn clients_listener_adds_clients_to_hashmap() {
 
     let test = TcpStream::connect(&"127.0.0.1:9099".parse().unwrap())
         .and_then(move |socket| {
-            tokio::io::write_all(socket.try_clone().unwrap(), "355".as_bytes().to_vec())
+            tokio::io::write_all(socket, "355".as_bytes().to_vec())
                 .wait()
                 .unwrap();
             Ok(())

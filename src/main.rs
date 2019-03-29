@@ -1,5 +1,6 @@
 use followermaze::{client, client::Client, events};
 use futures::sync::mpsc::unbounded;
+use log::info;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::prelude::Future;

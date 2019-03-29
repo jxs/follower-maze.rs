@@ -9,11 +9,11 @@ name = "followermaze"
 path = "src/lib/mod.rs"
 
 [dependencies]
-# tokio = "0.1.7"
-tokio = "0.1.8"
-futures = "0.1.20"
+tokio = "0.1.18"
+futures = "0.1.25"
 log = "0.4.2"
 env_logger = "0.5.10"
+bytes = "0.4.12"
 
 [profile.release]
 debug = true

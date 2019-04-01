@@ -5,8 +5,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::prelude::Future;
 use tokio::runtime::Runtime;
-use log::log;
-use log::info;
 
 fn main() {
     env_logger::init();

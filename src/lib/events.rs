@@ -1,15 +1,82 @@
 use crate::client::Client;
+use bytes::BytesMut;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
+use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use tokio;
+use tokio::codec::{Decoder, FramedRead, LinesCodec};
+use tokio::io::AsyncRead;
 use tokio::net::TcpListener;
-use tokio::prelude::{
-    future::{loop_fn, Loop},
-    Future, Stream,
-};
-use tokio::codec::{Framed, LinesCodec};
+use tokio::prelude::{Future, Stream};
+
+struct EventsDecoder {
+    lines: LinesCodec,
+    events_queue: HashMap<usize, Vec<String>>,
+    state: usize,
+}
+
+impl EventsDecoder {
+    fn new() -> EventsDecoder {
+        EventsDecoder {
+            lines: LinesCodec::new(),
+            events_queue: HashMap::new(),
+            state: 1,
+        }
+    }
+}
+
+impl Decoder for EventsDecoder {
+    type Item = Vec<String>;
+    type Error = Error;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Error> {
+        let event = self.lines.decode(buf)?;
+        if event.is_none() {
+            return Ok(None);
+        }
+
+        let pevent: Vec<String> = event
+            .as_ref()
+            .unwrap()
+            .trim()
+            .split('|')
+            .map(|x| x.to_string())
+            .collect();
+        let seq: usize = match pevent[0].parse() {
+            Ok(seq) => seq,
+            Err(err) => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("events listener could not parse event, {}", err),
+                ));
+            }
+        };
+
+        self.events_queue.insert(seq, pevent.clone());
+        if let Some(pevent) = self.events_queue.remove(&self.state) {
+            self.state += 1;
+            return Ok(Some(pevent));
+        }
+        Ok(None)
+    }
+
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        //process remaining events in buffer
+        while !buf.is_empty() {
+            if let Some(event) = self.decode(buf)? {
+                return Ok(Some(event));
+            }
+        }
+
+        if let Some(pevent) = self.events_queue.remove(&self.state) {
+            self.state += 1;
+            return Ok(Some(pevent));
+        }
+        Ok(None)
+    }
+}
 
 pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), Error = ()> {
     let addr = addr.parse().unwrap();
@@ -21,53 +88,25 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
         .take(1)
         .collect()
         .map(|mut v| v.pop().unwrap())
-        .map(|socket| Framed::new(socket, LinesCodec::new()))
+        .map(|socket| FramedRead::new(socket.split().0, EventsDecoder::new()))
         .map_err(|err| {
-            error!("events listener error {:?}", err);
+            error!("events listener frame read error {:?}", err);
         });
 
+    fevents_source.and_then(|events_source| {
+        events_source
+            .for_each(move |event| {
+                tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
+                    error!(
+                        "events listener error sending event: {} : {}",
+                        event.join("|"),
+                        err
+                    );
+                    panic!()
+                });
 
-    fevents_source.and_then(move |events_source| {
-        loop_fn(
-            (1, HashMap::new(), tx.clone(), events_source),
-            |(mut state, mut events_queue, tx, reader)| {
-                reader.into_future().and_then(move |(event, reader)| {
-                    let event = match event {
-                        Some(event) => event,
-                        None => return Ok(Loop::Break(()))
-                    };
-                    debug!("events listener read event: {}", event);
-                    let pevent: Vec<String> =
-                        event.trim().split('|').map(|x| x.to_string()).collect();
-                    let seq: usize = match pevent[0].parse() {
-                        Ok(seq) => seq,
-                        Err(err) => {
-                            error!("events listener could not parse event, {}", err);
-                            return Ok(Loop::Continue((state, events_queue, tx, reader)));
-                        }
-                    };
-                    trace!("events listener inserted event: {} -- {:?}", seq, pevent);
-                    events_queue.insert(seq, pevent);
-                    while let Some(pevent) = events_queue.remove(&state) {
-                        tx.unbounded_send(pevent.clone()).unwrap_or_else(|err| {
-                            error!(
-                                "events listener error sending event: {} : {}",
-                                event, err
-                            );
-                            panic!()
-                        });
-                        state += 1;
-
-                        debug!(
-                            "events listener sent event : {}, state: {}",
-                            pevent.join("|"),
-                            state
-                        );
-                    }
-
-                    Ok(Loop::Continue((state, events_queue, tx, reader)))
-
-                })
+                debug!("events listener sent event : {}", event.join("|"),);
+                Ok(())
             })
             .map_err(|err| {
                 error!("events listener error {:?}", err);

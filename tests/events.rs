@@ -1,4 +1,4 @@
-use followermaze::{client::Client, events};
+use followermaze::{client::Client, events::{self, Processor}};
 use futures::sync::mpsc::unbounded;
 use futures::Future;
 use std::collections::HashMap;
@@ -29,14 +29,6 @@ fn events_listener_accepts_event_parses_and_sends_ordered_through_channel() {
                 .and_then(|(socket, _buf)| tokio::io::write_all(socket, "1|B\n".as_bytes()))
                 .wait()
                 .unwrap();
-
-            // tokio::io::write_all(socket.try_clone().unwrap(), "2|S|46\n".as_bytes())
-            //     .wait()
-            //     .unwrap();
-
-            // tokio::io::write_all(socket.try_clone().unwrap(), "1|B\n".as_bytes())
-            //     .wait()
-            //     .unwrap();
 
             Ok(())
         })
@@ -96,7 +88,7 @@ fn events_handler_sends_broadcast_event_to_all_clients() {
     tx.unbounded_send(vec!["17".to_string(), "B".to_string()])
         .unwrap();
 
-    rt.spawn(events::handle(rx, clients.clone()));
+    rt.spawn(Processor::new(rx, clients.clone()));
 
     // wait to allow for events::handle to aquire write lock
     thread::sleep(time::Duration::from_millis(10));
@@ -118,7 +110,7 @@ fn events_handler_sends_private_message_to_matching_client() {
 
     seed_clients(clients.clone());
 
-    rt.spawn(events::handle(rx, clients.clone()));
+    rt.spawn(Processor::new(rx, clients.clone()));
     tx.unbounded_send(vec![
         "15".to_string(),
         "P".to_string(),
@@ -154,7 +146,7 @@ fn events_handler_sends_status_update_message_to_matching_client_after_follow() 
 
     seed_clients(clients.clone());
 
-    rt.spawn(events::handle(rx, clients.clone()));
+    rt.spawn(Processor::new(rx, clients.clone()));
     tx.unbounded_send(vec![
         "15".to_string(),
         "F".to_string(),
@@ -232,7 +224,7 @@ fn events_handler_doesnt_send_status_update_message_to_matching_client_after_unf
 
     seed_clients(clients.clone());
 
-    rt.spawn(events::handle(rx, clients.clone()));
+    rt.spawn(Processor::new(rx, clients.clone()));
     tx.unbounded_send(vec![
         "15".to_string(),
         "F".to_string(),

@@ -6,6 +6,8 @@ use std::sync::{Arc, RwLock};
 use tokio::prelude::Future;
 use tokio::runtime::Runtime;
 
+use events::Processor;
+
 fn main() {
     env_logger::init();
 
@@ -17,7 +19,7 @@ fn main() {
 
     rt.spawn(events::listen("127.0.0.1:9090", tx));
     rt.spawn(client::listen("127.0.0.1:9099", clients.clone()));
-    rt.spawn(events::handle(rx, clients));
+    rt.spawn(Processor::new(rx, clients));
 
     rt.shutdown_on_idle().wait().unwrap();
 }

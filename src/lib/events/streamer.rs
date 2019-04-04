@@ -1,13 +1,13 @@
-use tokio::codec::{Decoder, FramedRead, LinesCodec};
-use std::collections::HashMap;
-use std::io::{Error, ErrorKind};
 use bytes::BytesMut;
+use futures::sync::mpsc::UnboundedSender;
 use futures::try_ready;
 use log::{debug, error};
-use tokio::prelude::{Async, Future, Poll, Stream};
-use tokio::net::TcpStream;
+use std::collections::HashMap;
+use std::io::{Error, ErrorKind};
+use tokio::codec::{Decoder, FramedRead, LinesCodec};
 use tokio::io::ReadHalf;
-use futures::sync::mpsc::UnboundedSender;
+use tokio::net::TcpStream;
+use tokio::prelude::{Async, Future, Poll, Stream};
 
 pub struct EventsDecoder {
     lines: LinesCodec,
@@ -78,12 +78,15 @@ impl Decoder for EventsDecoder {
 
 pub struct Streamer {
     reader: FramedRead<ReadHalf<TcpStream>, EventsDecoder>,
-    tx: UnboundedSender<Vec<String>>
+    tx: UnboundedSender<Vec<String>>,
 }
 
 impl Streamer {
-    pub fn new(reader: FramedRead<ReadHalf<TcpStream>, EventsDecoder>, tx: UnboundedSender<Vec<String>>) -> Streamer {
-        Streamer{reader, tx}
+    pub fn new(
+        reader: FramedRead<ReadHalf<TcpStream>, EventsDecoder>,
+        tx: UnboundedSender<Vec<String>>,
+    ) -> Streamer {
+        Streamer { reader, tx }
     }
 }
 
@@ -101,17 +104,17 @@ impl Future for Streamer {
                 Ok(result) => match try_ready!(Ok(result)) {
                     Some(event) => event,
                     None => return Ok(Async::Ready(())),
-                }
+                },
             };
 
-            self.tx.unbounded_send(event.clone()).unwrap_or_else(|err| {
+            if let Err(err) = self.tx.unbounded_send(event.clone()) {
                 error!(
                     "events listener error sending event: {} : {}",
                     event.join("|"),
                     err
                 );
                 panic!()
-            });
+            }
             debug!("events listener sent event : {}", event.join("|"),);
         }
     }

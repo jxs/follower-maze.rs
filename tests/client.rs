@@ -1,4 +1,5 @@
 use followermaze::{client, client::Client};
+use futures::sync::mpsc::{unbounded, UnboundedSender};
 use futures::Future;
 use std::collections::HashMap;
 use std::{
@@ -25,15 +26,16 @@ fn socket_receives_client_events() {
         .and_then(|sockets| {
             let socket = sockets.into_iter().next().unwrap();
             let write_half = socket.split().1;
-            let mut client = Client::new("354".to_string(), write_half);
+            let (tx, rx) = unbounded();
+            let client = Client::new("132".to_string(), write_half, rx);
             let sent_event = "911|P|46|68"
                 .to_string()
                 .split("|")
                 .map(|x| x.to_string())
                 .collect();
-            client.send(sent_event);
+            tx.unbounded_send(sent_event).unwrap();
 
-            tokio::spawn(client.run());
+            tokio::spawn(client);
             Ok(())
         })
         .map_err(|err| {
@@ -60,7 +62,8 @@ fn socket_receives_client_events() {
 #[test]
 fn clients_listener_adds_clients_to_hashmap() {
     let mut rt = Runtime::new().unwrap();
-    let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
+    let clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
     rt.spawn(client::listen("127.0.0.1:9099", clients.clone()));
 
     let test = TcpStream::connect(&"127.0.0.1:9099".parse().unwrap())

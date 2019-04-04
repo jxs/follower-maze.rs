@@ -1,15 +1,14 @@
+use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::try_ready;
+use log::{debug, error, trace};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::prelude::{Async, Future, Poll, Stream};
-use crate::client::Client;
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::try_ready;
-use log::{debug, trace};
 
 pub struct Processor<S: ::std::hash::BuildHasher> {
     followers: HashMap<String, HashSet<String>>,
     events_stream: UnboundedReceiver<Vec<String>>,
-    clients: Arc<RwLock<HashMap<String, Client, S>>>,
+    clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>, S>>>,
 }
 
 impl<S: ::std::hash::BuildHasher> Future for Processor<S> {
@@ -29,13 +28,32 @@ impl<S: ::std::hash::BuildHasher> Future for Processor<S> {
 }
 
 impl<S: ::std::hash::BuildHasher> Processor<S> {
-
-    pub fn new(events_stream: UnboundedReceiver<Vec<String>>, clients: Arc<RwLock<HashMap<String, Client, S>>>) -> Processor<S> {
-        Processor{
+    pub fn new(
+        events_stream: UnboundedReceiver<Vec<String>>,
+        clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>, S>>>,
+    ) -> Processor<S> {
+        Processor {
             followers: HashMap::new(),
             events_stream,
-            clients
+            clients,
         }
+    }
+
+    fn send_event(
+        &self,
+        client_id: String,
+        client: &UnboundedSender<Vec<String>>,
+        event: Vec<String>,
+    ) {
+        if let Err(err) = client.unbounded_send(event.clone()) {
+            error!(
+                "error sending event {}, to client {}, {}",
+                event.join("|"),
+                client_id,
+                err
+            );
+        }
+        debug!("send event {} to client {}", event.join("|"), client_id);
     }
 
     fn process_event(&mut self, event: Vec<String>) {
@@ -47,7 +65,7 @@ impl<S: ::std::hash::BuildHasher> Processor<S> {
                 let client_id = event[3].clone();
                 match clients.get_mut(&client_id) {
                     Some(client) => {
-                        client.send(event.clone());
+                        self.send_event(client_id, client, event);
                     }
                     _ => debug!(
                         "events handler skipping event {}, client {} not found",
@@ -59,12 +77,16 @@ impl<S: ::std::hash::BuildHasher> Processor<S> {
                 let client_id = event[3].clone();
                 match clients.get_mut(&client_id) {
                     Some(client) => {
-                        let followers = self.followers.entry(client_id).or_insert_with(HashSet::new);
+                        let followers = self
+                            .followers
+                            .entry(client_id.clone())
+                            .or_insert_with(HashSet::new);
                         followers.insert(event[2].clone());
-                        client.send(event.clone());
+                        self.send_event(client_id, client, event);
                     }
                     _ => {
-                        let followers = self.followers
+                        let followers = self
+                            .followers
                             .entry(client_id.clone())
                             .or_insert_with(HashSet::new);
                         followers.insert(event[2].clone());
@@ -91,8 +113,8 @@ impl<S: ::std::hash::BuildHasher> Processor<S> {
                 }
             }
             "B" => {
-                for (_client_id, client) in clients.iter_mut() {
-                    client.send(event.clone());
+                for (client_id, client) in clients.iter_mut() {
+                    self.send_event(client_id.to_string(), client, event.clone());
                 }
             }
             "S" => {
@@ -116,7 +138,9 @@ impl<S: ::std::hash::BuildHasher> Processor<S> {
                 );
                 for follower_id in followers.iter() {
                     match clients.get_mut(follower_id) {
-                        Some(follower) => follower.send(event.clone()),
+                        Some(follower) => {
+                            self.send_event(follower_id.to_string(), follower, event.clone())
+                        }
                         None => {
                             debug!(
                                 "events handler skipping sending event {}, follower:{} not found",
@@ -127,7 +151,7 @@ impl<S: ::std::hash::BuildHasher> Processor<S> {
                     };
                 }
             }
-            _ => {},
+            _ => {}
         }
     }
 }

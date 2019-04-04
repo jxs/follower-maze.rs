@@ -1,5 +1,6 @@
-use followermaze::{client, client::Client, events};
+use followermaze::{client, events};
 use futures::sync::mpsc::unbounded;
+use futures::sync::mpsc::UnboundedSender;
 use log::info;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -13,7 +14,8 @@ fn main() {
 
     let (tx, rx) = unbounded();
     let mut rt = Runtime::new().unwrap();
-    let clients: Arc<RwLock<HashMap<String, Client>>> = Arc::new(RwLock::new(HashMap::new()));
+    let clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 
     info!("Starting Follower Maze");
 

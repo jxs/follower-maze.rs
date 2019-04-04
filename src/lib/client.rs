@@ -1,89 +1,82 @@
-use bytes::Bytes;
-use futures::sink::Sink;
+use bytes::{Buf, Bytes};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::try_ready;
 use log::{debug, error, info};
 use std::collections::HashMap;
 use std::io::BufReader;
+use std::io::Cursor;
 use std::sync::{Arc, RwLock};
-use tokio::codec::{BytesCodec, FramedWrite};
-use tokio::io::{AsyncRead, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::prelude::{Future, Stream};
+use tokio::prelude::{Async, Future, Poll, Stream};
+
+enum State {
+    // waiting for events
+    Waiting,
+    // writing event on socket to client
+    Writing(Vec<String>, Cursor<Bytes>),
+}
 
 pub struct Client {
-    pub id: String,
-    pub socket: Option<WriteHalf<TcpStream>>,
-    pub sender: UnboundedSender<Vec<String>>,
-    pub receiver: Option<UnboundedReceiver<Vec<String>>>,
+    id: String,
+    socket: WriteHalf<TcpStream>,
+    rx: UnboundedReceiver<Vec<String>>,
+    state: State,
 }
 
 impl Client {
-    pub fn new(id: String, socket: WriteHalf<TcpStream>) -> Client {
-        let (sender, receiver) = unbounded();
+    pub fn new(
+        id: String,
+        socket: WriteHalf<TcpStream>,
+        rx: UnboundedReceiver<Vec<String>>,
+    ) -> Client {
         Client {
             id,
-            socket: Some(socket),
-            sender,
-            receiver: Some(receiver),
+            socket,
+            rx,
+            state: State::Waiting,
         }
     }
+}
 
-    pub fn send(&self, event: Vec<String>) {
-        let event_str = event.join("|");
-        self.sender.unbounded_send(event).unwrap_or_else(|err| {
-            error!(
-                "error deliervering event {} to client {},  {}",
-                event_str, self.id, err
-            );
-            panic!()
-        });
-    }
+impl Future for Client {
+    type Item = ();
+    type Error = ();
 
-    pub fn run(&mut self) -> impl Future<Item = (), Error = ()> {
-        let id = self.id.clone();
-
-        let socket = self.socket.take().expect("run can only be called once");
-        let receiver = self.receiver.take().expect("run can only be called once");
-
-        let messages_stream = receiver
-            .map({
-                move |event| {
-                    let event_str = event.join("|");
-                    let output = event_str.clone() + "\n";
-                    Bytes::from(output)
+    fn poll(&mut self) -> Poll<(), ()> {
+        loop {
+            match self.state {
+                State::Waiting => match try_ready!(self.rx.poll()) {
+                    Some(event) => {
+                        let event_str = event.join("|") + "\n";
+                        let data = Cursor::new(Bytes::from(event_str));
+                        self.state = State::Writing(event, data);
+                    }
+                    None => return Ok(Async::Ready(())),
+                },
+                State::Writing(ref event, ref mut data) => {
+                    while data.has_remaining() {
+                        if let Err(err) = self.socket.write_buf(data) {
+                            error!(
+                                "error sending event {} to client {}, {}",
+                                event.join("|"),
+                                self.id,
+                                err
+                            );
+                            panic!();
+                        }
+                    }
+                    debug!("delievered event {} to client {}", event.join("|"), self.id);
+                    self.state = State::Waiting;
                 }
-            })
-            .inspect({
-                let id = id.clone();
-                move |event| {
-                    info!(
-                        "client {} received event: {}",
-                        id,
-                        String::from_utf8(event.to_vec()).unwrap()
-                    );
-                }
-            });
-
-        let framed = FramedWrite::new(socket, BytesCodec::new()).sink_map_err(|_err| ());
-        framed.send_all(messages_stream).map(|_out| ()).map_err({
-            let id = id.clone();
-            //TODO ATTACH THE EVENT THAT FAILED
-            move |err| {
-                error!(
-                    "client {} error delivering event {} {:?}",
-                    id.clone(),
-                    "FAILED EVENT",
-                    err
-                );
-                panic!();
             }
-        })
+        }
     }
 }
 
 pub fn listen<S: ::std::hash::BuildHasher>(
     addr: &str,
-    clients: Arc<RwLock<HashMap<String, Client, S>>>,
+    clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>, S>>>,
 ) -> impl Future<Item = (), Error = ()> {
     let addrf = addr.parse().unwrap();
     let listener = TcpListener::bind(&addrf).unwrap();
@@ -100,10 +93,11 @@ pub fn listen<S: ::std::hash::BuildHasher>(
             tokio::io::read_until(reader, b'\n', events).and_then(move |(_bfsocket, bclient)| {
                 let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
                 debug!("clients listener client connected: {:?}", client_id);
-                let mut client = Client::new(client_id.clone(), writer);
-                tokio::spawn(client.run());
+                let (tx, rx) = unbounded();
+                let client = Client::new(client_id.clone(), writer, rx);
+                tokio::spawn(client);
                 let mut clients_rw = clients.write().unwrap();
-                clients_rw.insert(client_id, client);
+                clients_rw.insert(client_id, tx);
                 Ok(())
             })
         })

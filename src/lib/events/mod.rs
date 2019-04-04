@@ -2,15 +2,15 @@ pub mod processor;
 pub mod streamer;
 
 use futures::sync::mpsc::UnboundedSender;
-use log::{info, error};
+use log::{error, info};
 use tokio;
 use tokio::codec::FramedRead;
 use tokio::io::AsyncRead;
-use tokio::prelude::{Future, Stream};
 use tokio::net::TcpListener;
+use tokio::prelude::{Future, Stream};
 
 pub use processor::Processor;
-pub use streamer::{Streamer, EventsDecoder};
+pub use streamer::{EventsDecoder, Streamer};
 
 pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item = (), Error = ()> {
     let addr = addr.parse().unwrap();
@@ -27,7 +27,5 @@ pub fn listen(addr: &str, tx: UnboundedSender<Vec<String>>) -> impl Future<Item 
             error!("events listener frame read error {:?}", err);
         });
 
-    fevents_source.and_then(|framed| {
-        Streamer::new(framed, tx)
-    })
+    fevents_source.and_then(|framed| Streamer::new(framed, tx))
 }

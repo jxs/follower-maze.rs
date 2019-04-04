@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use tokio::prelude::Future;
 use tokio::runtime::Runtime;
 
-use events::Processor;
+use events::{Processor, Streamer};
 
 fn main() {
     env_logger::init();
@@ -19,7 +19,8 @@ fn main() {
 
     info!("Starting Follower Maze");
 
-    rt.spawn(events::listen("127.0.0.1:9090", tx));
+    let streamer = Streamer::new("127.0.0.1:9090", tx).expect("could not create events streamer");
+    rt.spawn(streamer);
     rt.spawn(client::listen("127.0.0.1:9099", clients.clone()));
     rt.spawn(Processor::new(rx, clients));
 

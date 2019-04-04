@@ -56,7 +56,8 @@ impl Future for Client {
                 },
                 State::Writing(ref event, ref mut data) => {
                     while data.has_remaining() {
-                        if let Err(err) = self.socket.write_buf(data) {
+                        let result = self.socket.write_buf(data);
+                        if let Err(err) = result {
                             error!(
                                 "error sending event {} to client {}, {}",
                                 event.join("|"),
@@ -65,6 +66,7 @@ impl Future for Client {
                             );
                             panic!();
                         }
+                        try_ready!(Ok(result.unwrap()));
                     }
                     debug!("delievered event {} to client {}", event.join("|"), self.id);
                     self.state = State::Waiting;

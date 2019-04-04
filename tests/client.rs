@@ -3,6 +3,7 @@ use futures::sync::mpsc::{unbounded, UnboundedSender};
 use futures::Future;
 use std::collections::HashMap;
 use std::{
+    io::BufReader,
     sync::{Arc, RwLock},
     thread, time,
 };
@@ -12,7 +13,7 @@ use tokio::prelude::Stream;
 use tokio::runtime::Runtime;
 
 #[test]
-fn socket_receives_client_events() {
+fn client_socket_receives_client_events() {
     env_logger::init();
     let mut rt = Runtime::new().unwrap();
     let addr = "127.0.0.1:0".parse().unwrap();
@@ -21,21 +22,16 @@ fn socket_receives_client_events() {
 
     let incoming = listener
         .incoming()
-        .take(1)
-        .collect()
-        .and_then(|sockets| {
-            let socket = sockets.into_iter().next().unwrap();
-            let write_half = socket.split().1;
+        .into_future()
+        .and_then(move |(socket, _rest)| {
+            println!("client connected! : {:?}", socket);
+            let (_, writer) = socket.unwrap().split();
             let (tx, rx) = unbounded();
-            let client = Client::new("132".to_string(), write_half, rx);
-            let sent_event = "911|P|46|68"
-                .to_string()
-                .split("|")
-                .map(|x| x.to_string())
-                .collect();
-            tx.unbounded_send(sent_event).unwrap();
-
+            let client = Client::new("132".to_string(), writer, rx);
             tokio::spawn(client);
+            let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
+
+            tx.unbounded_send(event).unwrap();
             Ok(())
         })
         .map_err(|err| {
@@ -45,13 +41,16 @@ fn socket_receives_client_events() {
     rt.spawn(incoming);
 
     let test = stream
-        .and_then(|socket| {
+        .and_then(move |socket| {
+            println!("connected to socket!");
             let event_bytes = vec![];
-            tokio::io::read_to_end(socket, event_bytes.clone()).and_then(|(_socket, output)| {
-                let output = String::from_utf8(output).unwrap();
-                assert_eq!(output, "911|P|46|68\n");
-                Ok(())
-            })
+            tokio::io::read_until(BufReader::new(socket), b'\n', event_bytes).and_then(
+                |(_socket, output)| {
+                    let output = String::from_utf8(output).unwrap();
+                    assert_eq!(output, "911|P|46|68\n");
+                    Ok(())
+                },
+            )
         })
         .map_err(|err| {
             panic!("{:?}", err);

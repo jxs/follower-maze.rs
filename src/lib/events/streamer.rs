@@ -5,8 +5,8 @@ use log::{debug, error};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use tokio::codec::{Decoder, FramedRead, LinesCodec};
-use tokio::io::ReadHalf;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, ReadHalf};
+use tokio::net::{tcp::Incoming, TcpListener, TcpStream};
 use tokio::prelude::{Async, Future, Poll, Stream};
 
 pub struct EventsDecoder {
@@ -76,17 +76,26 @@ impl Decoder for EventsDecoder {
     }
 }
 
+enum State {
+    //waiting for tcp connection
+    Connecting(Incoming),
+    //streaming events,
+    Streaming(FramedRead<ReadHalf<TcpStream>, EventsDecoder>),
+}
+
 pub struct Streamer {
-    reader: FramedRead<ReadHalf<TcpStream>, EventsDecoder>,
     tx: UnboundedSender<Vec<String>>,
+    state: State,
 }
 
 impl Streamer {
-    pub fn new(
-        reader: FramedRead<ReadHalf<TcpStream>, EventsDecoder>,
-        tx: UnboundedSender<Vec<String>>,
-    ) -> Streamer {
-        Streamer { reader, tx }
+    pub fn new(addr: &str, tx: UnboundedSender<Vec<String>>) -> Result<Streamer, Error> {
+        let addr = addr.parse().unwrap();
+        let connect_future = TcpListener::bind(&addr)?.incoming();
+        Ok(Streamer {
+            tx,
+            state: State::Connecting(connect_future),
+        })
     }
 }
 
@@ -96,26 +105,46 @@ impl Future for Streamer {
 
     fn poll(&mut self) -> Poll<(), ()> {
         loop {
-            let event = match self.reader.poll() {
-                Err(err) => {
-                    error!("events streamer frame read error {:?}", err);
-                    panic!();
-                }
-                Ok(result) => match try_ready!(Ok(result)) {
-                    Some(event) => event,
-                    None => return Ok(Async::Ready(())),
-                },
-            };
+            match self.state {
+                State::Connecting(ref mut f) => {
+                    let result = f.poll();
+                    if let Err(err) = result {
+                        error!("events streamer error: {}", err);
+                        panic!();
+                    }
 
-            if let Err(err) = self.tx.unbounded_send(event.clone()) {
-                error!(
-                    "events listener error sending event: {} : {}",
-                    event.join("|"),
-                    err
-                );
-                panic!()
+                    match try_ready!(Ok(result.unwrap())) {
+                        Some(socket) => {
+                            let reader = FramedRead::new(socket.split().0, EventsDecoder::new());
+                            self.state = State::Streaming(reader);
+                        }
+                        None => unreachable!(),
+                    }
+                }
+                State::Streaming(ref mut reader) => {
+                    let result = reader.poll();
+
+                    if let Err(err) = result {
+                        error!("events streamer frame read error {:?}", err);
+                        panic!();
+                    }
+
+                    match try_ready!(Ok(result.unwrap())) {
+                        Some(event) => {
+                            if let Err(err) = self.tx.unbounded_send(event.clone()) {
+                                error!(
+                                    "events listener error sending event: {} : {}",
+                                    event.join("|"),
+                                    err
+                                );
+                                panic!()
+                            }
+                            debug!("events listener sent event : {}", event.join("|"),);
+                        },
+                        None => return Ok(Async::Ready(())),
+                    }
+                }
             }
-            debug!("events listener sent event : {}", event.join("|"),);
         }
     }
 }

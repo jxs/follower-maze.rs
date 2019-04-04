@@ -18,7 +18,7 @@ fn events_listener_accepts_event_parses_and_sends_ordered_through_channel() {
     let (tx, rx) = unbounded();
     let addr = "127.0.0.1:9090";
 
-    rt.spawn(events::listen(addr, tx));
+    rt.spawn(events::Streamer::new(addr, tx).unwrap());
     let stream = TcpStream::connect(&addr.parse().unwrap());
 
     let event_send = stream

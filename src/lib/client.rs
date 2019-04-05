@@ -7,6 +7,7 @@ use std::io::BufReader;
 use std::io::Cursor;
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncRead, AsyncWrite, WriteHalf};
+use tokio::codec::{FramedRead, LinesCodec};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::{Async, Future, Poll, Stream};
 
@@ -89,11 +90,12 @@ pub fn listen<S: ::std::hash::BuildHasher>(
         .for_each(move |socket| {
             //move clients to this closure
             let clients = Arc::clone(&clients);
-            let events = Vec::new();
             let (reader, writer) = socket.split();
             let reader = BufReader::new(reader);
-            tokio::io::read_until(reader, b'\n', events).and_then(move |(_bfsocket, bclient)| {
-                let client_id = String::from_utf8(bclient).unwrap().trim().to_string();
+            let framed = FramedRead::new(reader, LinesCodec::new());
+
+            framed.into_future().and_then(move |(client_id, _rest)| {
+                let client_id = client_id.unwrap();
                 debug!("clients listener client connected: {:?}", client_id);
                 let (tx, rx) = unbounded();
                 let client = Client::new(client_id.clone(), writer, rx);
@@ -102,6 +104,7 @@ pub fn listen<S: ::std::hash::BuildHasher>(
                 clients_rw.insert(client_id, tx);
                 Ok(())
             })
+            .map_err(|(err, _rest)| err)
         })
         .map_err(|err| {
             error!("clients listener, error {:?}", err);

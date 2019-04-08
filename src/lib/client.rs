@@ -1,14 +1,10 @@
 use bytes::{Buf, Bytes};
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::sync::mpsc::UnboundedReceiver;
 use futures::try_ready;
-use log::{debug, error, info};
-use std::collections::HashMap;
-use std::io::BufReader;
+use log::{debug, error};
 use std::io::Cursor;
-use std::sync::{Arc, RwLock};
-use tokio::io::{AsyncRead, AsyncWrite, WriteHalf};
-use tokio::codec::{FramedRead, LinesCodec};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncWrite, WriteHalf};
+use tokio::net::TcpStream;
 use tokio::prelude::{Async, Future, Poll, Stream};
 
 enum State {
@@ -77,36 +73,58 @@ impl Future for Client {
     }
 }
 
-pub fn listen<S: ::std::hash::BuildHasher>(
-    addr: &str,
-    clients: Arc<RwLock<HashMap<String, UnboundedSender<Vec<String>>, S>>>,
-) -> impl Future<Item = (), Error = ()> {
-    let addrf = addr.parse().unwrap();
-    let listener = TcpListener::bind(&addrf).unwrap();
+#[cfg(test)]
+mod tests {
+    use super::Client;
+    use futures::sync::mpsc::unbounded;
+    use futures::Future;
+    use std::io::BufReader;
+    use tokio::io::AsyncRead;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::prelude::Stream;
+    use tokio::runtime::Runtime;
 
-    info!("clients listener Listening for clients on {}", addr);
-    listener
-        .incoming()
-        .for_each(move |socket| {
-            //move clients to this closure
-            let clients = Arc::clone(&clients);
-            let (reader, writer) = socket.split();
-            let reader = BufReader::new(reader);
-            let framed = FramedRead::new(reader, LinesCodec::new());
+    #[test]
+    fn client_socket_receives_client_events() {
+        env_logger::init();
+        let mut rt = Runtime::new().unwrap();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
+        let stream = TcpStream::connect(&listener.local_addr().unwrap());
 
-            framed.into_future().and_then(move |(client_id, _rest)| {
-                let client_id = client_id.unwrap();
-                debug!("clients listener client connected: {:?}", client_id);
+        let incoming = listener
+            .incoming()
+            .into_future()
+            .and_then(move |(socket, _rest)| {
+                let (_, writer) = socket.unwrap().split();
                 let (tx, rx) = unbounded();
-                let client = Client::new(client_id.clone(), writer, rx);
+                let client = Client::new("132".to_string(), writer, rx);
                 tokio::spawn(client);
-                let mut clients_rw = clients.write().unwrap();
-                clients_rw.insert(client_id, tx);
+                let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
+
+                tx.unbounded_send(event).unwrap();
                 Ok(())
             })
-            .map_err(|(err, _rest)| err)
-        })
-        .map_err(|err| {
-            error!("clients listener, error {:?}", err);
-        })
+            .map_err(|err| {
+                panic!("{:?}", err);
+            });
+
+        rt.spawn(incoming);
+
+        let test = stream
+            .and_then(move |socket| {
+                let event_bytes = vec![];
+                tokio::io::read_until(BufReader::new(socket), b'\n', event_bytes).and_then(
+                    |(_socket, output)| {
+                        let output = String::from_utf8(output).unwrap();
+                        assert_eq!(output, "911|P|46|68\n");
+                        Ok(())
+                    },
+                )
+            })
+            .map_err(|err| {
+                panic!("{:?}", err);
+            });
+        rt.block_on(test).unwrap();
+    }
 }

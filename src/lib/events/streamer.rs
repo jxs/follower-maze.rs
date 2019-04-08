@@ -3,6 +3,7 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::try_ready;
 use log::{debug, error};
 use std::collections::HashMap;
+use std::default::Default;
 use std::io::{Error, ErrorKind};
 use tokio::codec::{Decoder, FramedRead, LinesCodec};
 use tokio::io::{AsyncRead, ReadHalf};
@@ -15,8 +16,8 @@ pub struct EventsDecoder {
     state: usize,
 }
 
-impl EventsDecoder {
-    pub fn new() -> EventsDecoder {
+impl Default for EventsDecoder {
+    fn default() -> Self {
         EventsDecoder {
             lines: LinesCodec::new(),
             events_queue: HashMap::new(),
@@ -36,7 +37,6 @@ impl Decoder for EventsDecoder {
         }
 
         let pevent: Vec<String> = event
-            .as_ref()
             .unwrap()
             .trim()
             .split('|')
@@ -115,7 +115,7 @@ impl Future for Streamer {
 
                     match try_ready!(Ok(result.unwrap())) {
                         Some(socket) => {
-                            let reader = FramedRead::new(socket.split().0, EventsDecoder::new());
+                            let reader = FramedRead::new(socket.split().0, EventsDecoder::default());
                             self.state = State::Streaming(reader);
                         }
                         None => unreachable!(),
@@ -140,11 +140,52 @@ impl Future for Streamer {
                                 panic!()
                             }
                             debug!("events listener sent event : {}", event.join("|"),);
-                        },
+                        }
                         None => return Ok(Async::Ready(())),
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventsDecoder;
+    use bytes::BytesMut;
+    use tokio::codec::Decoder;
+
+    #[test]
+    fn decoder_sorts_events_by_order() {
+        let event_seq = "4|S|32\n1|B\n3|P|32|56\n2|U|12|9\n";
+        let mut buf = BytesMut::from(event_seq);
+        let mut decoder = EventsDecoder::default();
+        assert_eq!(
+            vec!["1".to_string(), "B".to_string()],
+            decoder.decode_eof(&mut buf).unwrap().unwrap()
+        );
+        assert_eq!(
+            vec![
+                "2".to_string(),
+                "U".to_string(),
+                "12".to_string(),
+                "9".to_string()
+            ],
+            decoder.decode_eof(&mut buf).unwrap().unwrap()
+        );
+        assert_eq!(
+            vec![
+                "3".to_string(),
+                "P".to_string(),
+                "32".to_string(),
+                "56".to_string()
+            ],
+            decoder.decode_eof(&mut buf).unwrap().unwrap()
+        );
+        assert_eq!(
+            vec!["4".to_string(), "S".to_string(), "32".to_string()],
+            decoder.decode_eof(&mut buf).unwrap().unwrap()
+        );
+        assert_eq!(None, decoder.decode_eof(&mut buf).unwrap());
     }
 }

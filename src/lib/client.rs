@@ -1,7 +1,7 @@
 use bytes::{Buf, Bytes};
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::try_ready;
-use log::{debug, error};
+use log::debug;
 use std::io::Cursor;
 use tokio::io::{AsyncWrite, WriteHalf};
 use tokio::net::TcpStream;
@@ -53,17 +53,12 @@ impl Future for Client {
                 },
                 State::Writing(ref event, ref mut data) => {
                     while data.has_remaining() {
-                        let result = self.socket.write_buf(data);
-                        if let Err(err) = result {
-                            error!(
-                                "error sending event {} to client {}, {}",
-                                event.join("|"),
-                                self.id,
-                                err
-                            );
-                            panic!();
-                        }
-                        try_ready!(Ok(result.unwrap()));
+                        let result = self.socket.write_buf(data).expect(&format!(
+                            "error sending event {} to client {}",
+                            event.join("|"),
+                            self.id
+                        ));
+                        try_ready!(Ok(result));
                     }
                     debug!("delievered event {} to client {}", event.join("|"), self.id);
                     self.state = State::Waiting;

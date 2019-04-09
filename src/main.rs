@@ -1,15 +1,16 @@
-use futures::sync::mpsc::unbounded;
+use failure::Error;
+use futures::sync::mpsc::channel;
 use log::info;
 use tokio::prelude::Future;
 use tokio::runtime::Runtime;
 
 use followermaze::events::{Processor, Streamer};
 
-fn main() {
+fn main() -> Result<(), Error> {
     env_logger::init();
 
-    let (tx, rx) = unbounded();
-    let mut rt = Runtime::new().unwrap();
+    let (tx, rx) = channel(5);
+    let mut rt = Runtime::new()?;
 
     info!("Starting Follower Maze");
 
@@ -19,5 +20,7 @@ fn main() {
     rt.spawn(streamer);
     rt.spawn(processor);
 
+    //wait() returns Err(()) if Err which doesn't implement Error
     rt.shutdown_on_idle().wait().unwrap();
+    Ok(())
 }

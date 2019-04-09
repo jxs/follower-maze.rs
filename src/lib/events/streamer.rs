@@ -1,14 +1,16 @@
 use bytes::BytesMut;
-use futures::sync::mpsc::UnboundedSender;
+use failure::Error;
+use futures::sink::Send;
+use futures::sync::mpsc::Sender;
 use futures::try_ready;
-use log::{debug, error};
+use log::debug;
 use std::collections::HashMap;
 use std::default::Default;
-use std::io::{Error, ErrorKind};
+use std::io::{Error as IoError, ErrorKind};
 use tokio::codec::{Decoder, FramedRead, LinesCodec};
 use tokio::io::{AsyncRead, ReadHalf};
 use tokio::net::{tcp::Incoming, TcpListener, TcpStream};
-use tokio::prelude::{Async, Future, Poll, Stream};
+use tokio::prelude::{Async, Future, Poll, Sink, Stream};
 
 pub struct EventsDecoder {
     lines: LinesCodec,
@@ -31,24 +33,19 @@ impl Decoder for EventsDecoder {
     type Error = Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Error> {
-        let event = self.lines.decode(buf)?;
-        if event.is_none() {
-            return Ok(None);
-        }
+        let pevent: Vec<String> = match self.lines.decode(buf)? {
+            Some(pevent) => pevent.trim().split('|').map(|x| x.to_string()).collect(),
+            None => return Ok(None),
+        };
 
-        let pevent: Vec<String> = event
-            .unwrap()
-            .trim()
-            .split('|')
-            .map(|x| x.to_string())
-            .collect();
         let seq: usize = match pevent[0].parse() {
             Ok(seq) => seq,
             Err(err) => {
-                return Err(Error::new(
+                return Err(IoError::new(
                     ErrorKind::InvalidInput,
                     format!("events listener could not parse event, {}", err),
-                ));
+                )
+                           .into());
             }
         };
 
@@ -79,21 +76,25 @@ impl Decoder for EventsDecoder {
 enum State {
     //waiting for tcp connection
     Connecting(Incoming),
-    //streaming events,
-    Streaming(FramedRead<ReadHalf<TcpStream>, EventsDecoder>),
+    //waiting for events on socket,
+    Waiting,
+    //streaming event to channel
+    Streaming(Send<Sender<Vec<String>>>, Vec<String>),
 }
 
 pub struct Streamer {
-    tx: UnboundedSender<Vec<String>>,
+    tx: Option<Sender<Vec<String>>>,
+    socket: Option<FramedRead<ReadHalf<TcpStream>, EventsDecoder>>,
     state: State,
 }
 
 impl Streamer {
-    pub fn new(addr: &str, tx: UnboundedSender<Vec<String>>) -> Result<Streamer, Error> {
-        let addr = addr.parse().unwrap();
+    pub fn new(addr: &str, tx: Sender<Vec<String>>) -> Result<Streamer, Error> {
+        let addr = addr.parse()?;
         let connect_future = TcpListener::bind(&addr)?.incoming();
         Ok(Streamer {
-            tx,
+            tx: Some(tx),
+            socket: None,
             state: State::Connecting(connect_future),
         })
     }
@@ -105,44 +106,44 @@ impl Future for Streamer {
 
     fn poll(&mut self) -> Poll<(), ()> {
         loop {
-            match self.state {
-                State::Connecting(ref mut f) => {
-                    let result = f.poll();
-                    if let Err(err) = result {
-                        error!("events streamer error: {}", err);
-                        panic!();
-                    }
+            match &mut self.state {
+                State::Connecting(f) => {
+                    let result = f.poll().expect("events streamer error");
 
-                    match try_ready!(Ok(result.unwrap())) {
+                    match try_ready!(Ok(result)) {
                         Some(socket) => {
-                            let reader = FramedRead::new(socket.split().0, EventsDecoder::default());
-                            self.state = State::Streaming(reader);
+                            self.socket =
+                                Some(FramedRead::new(socket.split().0, EventsDecoder::default()));
+                            self.state = State::Waiting;
                         }
                         None => unreachable!(),
                     }
                 }
-                State::Streaming(ref mut reader) => {
-                    let result = reader.poll();
+                State::Waiting => {
+                    // when the state is connecting we know we have the socket
+                    let result = self
+                        .socket
+                        .as_mut()
+                        .expect("Attempted to poll Streamer after completion")
+                        .poll()
+                        .expect("events streamer frame read error");
 
-                    if let Err(err) = result {
-                        error!("events streamer frame read error {:?}", err);
-                        panic!();
-                    }
-
-                    match try_ready!(Ok(result.unwrap())) {
+                    match try_ready!(Ok(result)) {
                         Some(event) => {
-                            if let Err(err) = self.tx.unbounded_send(event.clone()) {
-                                error!(
-                                    "events listener error sending event: {} : {}",
-                                    event.join("|"),
-                                    err
-                                );
-                                panic!()
-                            }
+                            self.state = State::Streaming(
+                                self.tx.take().unwrap().send(event.clone()),
+                                event.clone(),
+                            );
                             debug!("events listener sent event : {}", event.join("|"),);
                         }
                         None => return Ok(Async::Ready(())),
                     }
+                }
+                State::Streaming(sender, event) => {
+                    let event_ok = sender.poll().expect(&format!("events listener error sending event: {}", event.join("|")));
+                    let tx = try_ready!(Ok(event_ok));
+                    self.tx = Some(tx);
+                    self.state = State::Waiting;
                 }
             }
         }

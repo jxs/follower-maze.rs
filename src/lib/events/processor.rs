@@ -1,5 +1,5 @@
 use failure::Error;
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::sync::mpsc::{unbounded, Receiver, UnboundedSender};
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -40,7 +40,7 @@ impl Stream for Listener {
                         self.state = ListenerState::Listening;
                         return Err(err.into());
                     }
-                    Ok(result) => match result {
+                    Ok(socket_ok) => match socket_ok {
                         Async::NotReady => {
                             self.state = ListenerState::Listening;
                             return Ok(Async::NotReady);
@@ -98,7 +98,7 @@ impl Listener {
 
 pub struct Processor {
     followers: HashMap<String, HashSet<String>>,
-    events_stream: UnboundedReceiver<Vec<String>>,
+    events_stream: Receiver<Vec<String>>,
     clients: HashMap<String, UnboundedSender<Vec<String>>>,
     listener: Listener,
 }
@@ -109,11 +109,7 @@ impl Future for Processor {
 
     fn poll(&mut self) -> Poll<(), ()> {
         loop {
-            let mut listener_state = self.listener.poll().unwrap_or_else(|err| {
-                error!("error listening for clients {:?}", err);
-                panic!();
-            });
-
+            let mut listener_state = self.listener.poll().expect("error listening for clients!");
 
             if let Async::Ready(option) = listener_state {
                 if let Some((id, socket)) = option {
@@ -147,10 +143,7 @@ impl Future for Processor {
 }
 
 impl Processor {
-    pub fn new(
-        addr: &str,
-        events_stream: UnboundedReceiver<Vec<String>>,
-    ) -> Result<Processor, Error> {
+    pub fn new(addr: &str, events_stream: Receiver<Vec<String>>) -> Result<Processor, Error> {
         let addr = addr.parse()?;
         Ok(Processor {
             followers: HashMap::new(),
@@ -276,7 +269,7 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::{Listener, ListenerState, Processor};
-    use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+    use futures::sync::mpsc::{channel, unbounded, Receiver, UnboundedReceiver, UnboundedSender};
     use std::collections::HashMap;
     use std::io::Write;
     use tokio::net::{TcpListener, TcpStream};
@@ -328,7 +321,7 @@ mod tests {
     fn processor_sends_broadcast_event_to_all_clients() {
         let addr = "127.0.0.1:0".parse().unwrap();
 
-        let (_tx, rx) = unbounded();
+        let (_tx, rx) = channel(5);
         let (txs, rxs) = seed_clients();
         let mut processor = Processor {
             followers: HashMap::new(),
@@ -348,7 +341,7 @@ mod tests {
     fn processor_sends_private_message_to_matching_client() {
         let addr = "127.0.0.1:0".parse().unwrap();
 
-        let (_tx, rx) = unbounded();
+        let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
         let mut processor = Processor {
             followers: HashMap::new(),
@@ -372,7 +365,7 @@ mod tests {
     fn processor_sends_status_update_message_to_matching_client_after_follow() {
         let addr = "127.0.0.1:0".parse().unwrap();
 
-        let (_tx, rx) = unbounded();
+        let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
         let mut processor = Processor {
             followers: HashMap::new(),
@@ -397,7 +390,7 @@ mod tests {
     fn processor_doesnt_send_status_update_message_to_matching_client_after_unfollow() {
         let addr = "127.0.0.1:0".parse().unwrap();
 
-        let (_tx, rx) = unbounded();
+        let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
         let mut processor = Processor {
             followers: HashMap::new(),

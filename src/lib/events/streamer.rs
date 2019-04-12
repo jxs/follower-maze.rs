@@ -131,6 +131,9 @@ impl Future for Streamer {
                     match try_ready!(Ok(result)) {
                         Some(event) => {
                             self.state = State::Streaming(
+                                //Streaming state is only entered when there's an event read from the socket
+                                //on that ocasion tx is always Some, Tx only becomes None while on the Streaming state,
+                                //after finishing streaming the sink is returned and put back on tx
                                 self.tx.take().unwrap().send(event.clone()),
                                 event.clone(),
                             );

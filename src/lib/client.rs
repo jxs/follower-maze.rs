@@ -53,12 +53,18 @@ impl Future for Client {
                 },
                 State::Writing(ref event, ref mut data) => {
                     while data.has_remaining() {
-                        let result = self.socket.write_buf(data).expect(&format!(
-                            "error sending event {} to client {}",
-                            event.join("|"),
-                            self.id
-                        ));
-                        try_ready!(Ok(result));
+                        let id = &self.id;
+                        let result = self.socket.write_buf(data).unwrap_or_else(|err| {
+                            panic!(
+                                "error sending event {} to client {}, {}",
+                                event.join("|"),
+                                &id,
+                                err
+                            )
+                        });
+                        if let Async::NotReady = result {
+                            return Ok(Async::NotReady);
+                        }
                     }
                     debug!("delievered event {} to client {}", event.join("|"), self.id);
                     self.state = State::Waiting;

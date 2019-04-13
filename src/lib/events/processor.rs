@@ -40,39 +40,31 @@ impl Stream for Listener {
                         self.state = ListenerState::Listening;
                         return Err(err.into());
                     }
-                    Ok(socket_ok) => match socket_ok {
-                        Async::NotReady => {
-                            self.state = ListenerState::Listening;
-                            return Ok(Async::NotReady);
-                        }
-                        Async::Ready(option) => match option {
-                            Some(socket) => {
-                                let (reader, writer) = socket.split();
-                                let framed = FramedRead::new(reader, LinesCodec::new());
-                                debug!("clients listener client connected");
-                                self.state = ListenerState::Connecting(writer, framed)
-                            }
-                            None => unreachable!(),
-                        },
-                    },
+                    Ok(Async::NotReady) => {
+                        self.state = ListenerState::Listening;
+                        return Ok(Async::NotReady);
+                    }
+                    Ok(Async::Ready(Some(socket))) => {
+                        let (reader, writer) = socket.split();
+                        let framed = FramedRead::new(reader, LinesCodec::new());
+                        debug!("clients listener client connected");
+                        self.state = ListenerState::Connecting(writer, framed)
+                    }
+                    Ok(Async::Ready(None)) => unreachable!(),
                 },
 
                 ListenerState::Connecting(writer, mut framed) => match framed.poll() {
                     Err(err) => return Err(err.into()),
-                    Ok(result) => match result {
-                        Async::NotReady => {
-                            self.state = ListenerState::Connecting(writer, framed);
-                            return Ok(Async::NotReady);
-                        }
-                        Async::Ready(item) => match item {
-                            Some(id) => {
-                                debug!("clients listener client read client id: {:?}", id);
-                                self.state = ListenerState::Listening;
-                                return Ok(Async::Ready(Some((id, writer))));
-                            }
-                            None => unreachable!(),
-                        },
-                    },
+                    Ok(Async::NotReady) => {
+                        self.state = ListenerState::Connecting(writer, framed);
+                        return Ok(Async::NotReady);
+                    }
+                    Ok(Async::Ready(Some(id))) => {
+                        debug!("clients listener client read client id: {:?}", id);
+                        self.state = ListenerState::Listening;
+                        return Ok(Async::Ready(Some((id, writer))));
+                    }
+                    Ok(Async::Ready(None)) => unreachable!(),
                 },
                 ListenerState::Empty => unreachable!(),
             }
@@ -111,32 +103,21 @@ impl Future for Processor {
         loop {
             let mut listener_state = self.listener.poll().expect("error listening for clients!");
 
-            if let Async::Ready(option) = listener_state {
-                if let Some((id, socket)) = option {
-                    let (tx, rx) = unbounded();
-                    let client = Client::new(id.clone(), socket, rx);
-                    tokio::spawn(client);
-                    self.clients.insert(id, tx);
-                }
+            if let Async::Ready(Some((id, socket))) = listener_state {
+                let (tx, rx) = unbounded();
+                let client = Client::new(id.clone(), socket, rx);
+                tokio::spawn(client);
+                self.clients.insert(id, tx);
                 // required because option was moved
                 listener_state = Async::Ready(None);
             }
 
             match self.events_stream.poll() {
                 Err(_err) => unreachable!(),
-                Ok(result) => match result {
-                    Async::NotReady => {
-                        if listener_state.is_not_ready() {
-                            return Ok(Async::NotReady);
-                        }
-                    }
-                    Async::Ready(result) => match result {
-                        Some(event) => {
-                            self.process_event(event);
-                        }
-                        None => return Ok(Async::Ready(())),
-                    },
-                },
+                Ok(Async::Ready(Some(event))) => self.process_event(event),
+                Ok(Async::Ready(None)) => return Ok(Async::Ready(())),
+                Ok(Async::NotReady) if listener_state.is_not_ready() => return Ok(Async::NotReady),
+                Ok(Async::NotReady) => {}
             }
         }
     }
@@ -269,7 +250,7 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::{Listener, ListenerState, Processor};
-    use futures::sync::mpsc::{channel, unbounded, Receiver, UnboundedReceiver, UnboundedSender};
+    use futures::sync::mpsc::{channel, unbounded, UnboundedReceiver, UnboundedSender};
     use std::collections::HashMap;
     use std::io::Write;
     use tokio::net::{TcpListener, TcpStream};

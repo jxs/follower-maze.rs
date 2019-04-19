@@ -1,126 +1,20 @@
+use crate::client::Client;
 use failure::Error;
-use futures::sync::mpsc::{unbounded, Receiver, UnboundedSender};
+use futures::channel::mpsc::{unbounded, Receiver, UnboundedSender};
+use futures::compat::Stream01CompatExt;
+use futures::StreamExt;
+use futures::{select, FutureExt};
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use tokio::codec::{FramedRead, LinesCodec};
-use tokio::io::{AsyncRead, ReadHalf, WriteHalf};
-use tokio::net::{tcp::Incoming, TcpListener, TcpStream};
-use tokio::prelude::{Async, Future, Poll, Stream};
-
-use crate::client::Client;
-
-enum ListenerState {
-    //listening for client connections
-    Listening,
-    //connecting client, reading it's ID
-    Connecting(
-        WriteHalf<TcpStream>,
-        FramedRead<ReadHalf<TcpStream>, LinesCodec>,
-    ),
-    //when polling the listener, used to move the state while borrowed
-    Empty,
-}
-
-struct Listener {
-    inner: Incoming,
-    state: ListenerState,
-}
-
-impl Stream for Listener {
-    type Item = (String, WriteHalf<TcpStream>);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
-            let listener_state = std::mem::replace(&mut self.state, ListenerState::Empty);
-            match listener_state {
-                ListenerState::Listening => match self.inner.poll() {
-                    Err(err) => {
-                        self.state = ListenerState::Listening;
-                        return Err(err.into());
-                    }
-                    Ok(Async::NotReady) => {
-                        self.state = ListenerState::Listening;
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(Async::Ready(Some(socket))) => {
-                        let (reader, writer) = socket.split();
-                        let framed = FramedRead::new(reader, LinesCodec::new());
-                        debug!("clients listener client connected");
-                        self.state = ListenerState::Connecting(writer, framed)
-                    }
-                    Ok(Async::Ready(None)) => unreachable!(),
-                },
-
-                ListenerState::Connecting(writer, mut framed) => match framed.poll() {
-                    Err(err) => return Err(err.into()),
-                    Ok(Async::NotReady) => {
-                        self.state = ListenerState::Connecting(writer, framed);
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(Async::Ready(Some(id))) => {
-                        debug!("clients listener client read client id: {:?}", id);
-                        self.state = ListenerState::Listening;
-                        return Ok(Async::Ready(Some((id, writer))));
-                    }
-                    Ok(Async::Ready(None)) => unreachable!(),
-                },
-                ListenerState::Empty => unreachable!(),
-            }
-        }
-    }
-}
-
-impl Listener {
-    fn new(addr: &SocketAddr) -> Result<Listener, Error> {
-        let inner = TcpListener::bind(addr)?;
-
-        info!(
-            "clients listener Listening for clients on {}",
-            inner.local_addr()?
-        );
-
-        Ok(Listener {
-            inner: inner.incoming(),
-            state: ListenerState::Listening,
-        })
-    }
-}
+use tokio::io::AsyncRead;
+use tokio::net::TcpListener;
 
 pub struct Processor {
     followers: HashMap<String, HashSet<String>>,
     events_stream: Receiver<Vec<String>>,
     clients: HashMap<String, UnboundedSender<Vec<String>>>,
-    listener: Listener,
-}
-
-impl Future for Processor {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        loop {
-            let mut listener_state = self.listener.poll().expect("error listening for clients!");
-
-            if let Async::Ready(Some((id, socket))) = listener_state {
-                let (tx, rx) = unbounded();
-                let client = Client::new(id.clone(), socket, rx);
-                tokio::spawn(client);
-                self.clients.insert(id, tx);
-                // required because option was moved
-                listener_state = Async::Ready(None);
-            }
-
-            match self.events_stream.poll() {
-                Err(_err) => unreachable!(),
-                Ok(Async::Ready(Some(event))) => self.process_event(event),
-                Ok(Async::Ready(None)) => return Ok(Async::Ready(())),
-                Ok(Async::NotReady) if listener_state.is_not_ready() => return Ok(Async::NotReady),
-                Ok(Async::NotReady) => {}
-            }
-        }
-    }
+    listener: Option<TcpListener>,
 }
 
 impl Processor {
@@ -130,8 +24,43 @@ impl Processor {
             followers: HashMap::new(),
             events_stream,
             clients: HashMap::new(),
-            listener: Listener::new(&addr)?,
+            listener: Some(TcpListener::bind(&addr)?),
         })
+    }
+
+    pub async fn run(mut self) {
+        let listener = self.listener.take().expect("run can only be polled once");
+        info!("clients listener Listening for clients on",);
+        let mut incoming = listener.incoming().compat();
+
+        loop {
+            select!(
+                mut client_socket_f = incoming.next().fuse() => match client_socket_f {
+                    Some(Ok(mut client_socket)) => {
+                        let (reader, writer) = client_socket.split();
+                        let mut lines = FramedRead::new(reader, LinesCodec::new()).compat();
+                        let id = match await!(lines.next()) {
+                            Some(Ok(id)) => id,
+                            Some(Err(err)) => panic!("error reading id from client socket, {}", err),
+                            None => panic!("error reading id from client socket, disconected early"),
+                        };
+                        let (tx, rx) = unbounded();
+                        let client = Client::new(id.clone(), writer, rx);
+                        runtime::spawn(client.run());
+                        self.clients.insert(id.clone(), tx);
+                        debug!("processor inserted client {}", id);
+                    },
+                    Some(Err(err)) => panic!("error reading client from socket, {}", err),
+                    None => unreachable!()
+                },
+                event = self.events_stream.next().fuse() => match event {
+                    Some(event) => {
+                        self.process_event(event)
+                    },
+                    None => return
+                },
+            );
+        }
     }
 
     //send the event to the client via channel
@@ -249,11 +178,11 @@ impl Processor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Listener, ListenerState, Processor};
-    use futures::sync::mpsc::{channel, unbounded, UnboundedReceiver, UnboundedSender};
+    use super::Processor;
+    use futures::channel::mpsc::{channel, unbounded, UnboundedReceiver, UnboundedSender};
+    use futures::executor::block_on;
+    use futures::StreamExt;
     use std::collections::HashMap;
-    use std::io::Write;
-    use tokio::net::{TcpListener, TcpStream};
     use tokio::prelude::{Future, Stream};
 
     fn seed_clients() -> (
@@ -282,54 +211,26 @@ mod tests {
     }
 
     #[test]
-    fn listener_reads_client_id() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let tcp_listener = TcpListener::bind(&addr).unwrap();
-        let local_addr = tcp_listener.local_addr().unwrap();
-        let listener = Listener {
-            inner: tcp_listener.incoming(),
-            state: ListenerState::Listening,
-        };
-
-        let mut client = TcpStream::connect(&local_addr).wait().unwrap();
-        client.write(b"1415\n").unwrap();
-        let fut = listener.take(1).collect().wait().unwrap();
-        let (client_id, _) = &fut[0];
-        assert_eq!("1415", client_id);
-    }
-
-    #[test]
     fn processor_sends_broadcast_event_to_all_clients() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-
         let (_tx, rx) = channel(5);
         let (txs, rxs) = seed_clients();
-        let mut processor = Processor {
-            followers: HashMap::new(),
-            events_stream: rx,
-            clients: txs,
-            listener: Listener::new(&addr).unwrap(),
-        };
+        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        processor.clients = txs;
         let event = vec!["342".to_string(), "B".to_string()];
         processor.process_event(event.clone());
-        for (_client_id, client) in rxs.into_iter() {
-            let received_event = client.take(1).collect().wait().unwrap();
-            assert_eq!(event, received_event[0]);
+        for (_client_id, mut client) in rxs.into_iter() {
+            let received_event = block_on(client.next());
+            assert_eq!(event, received_event.unwrap());
         }
     }
 
     #[test]
     fn processor_sends_private_message_to_matching_client() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor {
-            followers: HashMap::new(),
-            events_stream: rx,
-            clients: txs,
-            listener: Listener::new(&addr).unwrap(),
-        };
+        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        processor.clients = txs;
+
         let event = vec![
             "34".to_string(),
             "P".to_string(),
@@ -337,23 +238,18 @@ mod tests {
             "274".to_string(),
         ];
         processor.process_event(event.clone());
-        let client = rxs.remove("274").unwrap();
-        let received_event = client.take(1).collect().wait().unwrap();
-        assert_eq!(event, received_event[0]);
+        let mut client = rxs.remove("274").unwrap();
+        let received_event = block_on(client.next());
+        assert_eq!(event, received_event.unwrap());
     }
 
     #[test]
     fn processor_sends_status_update_message_to_matching_client_after_follow() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor {
-            followers: HashMap::new(),
-            events_stream: rx,
-            clients: txs,
-            listener: Listener::new(&addr).unwrap(),
-        };
+        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        processor.clients = txs;
+
         processor.process_event(vec![
             "15".to_string(),
             "F".to_string(),
@@ -362,23 +258,17 @@ mod tests {
         ]);
         let event = vec!["18".to_string(), "S".to_string(), "184".to_string()];
         processor.process_event(event.clone());
-        let client = rxs.remove("134").unwrap();
-        let received_event = client.take(1).collect().wait().unwrap();
-        assert_eq!(event, received_event[0]);
+        let mut client = rxs.remove("134").unwrap();
+        let received_event = block_on(client.next());
+        assert_eq!(event, received_event.unwrap());
     }
 
     #[test]
     fn processor_doesnt_send_status_update_message_to_matching_client_after_unfollow() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor {
-            followers: HashMap::new(),
-            events_stream: rx,
-            clients: txs,
-            listener: Listener::new(&addr).unwrap(),
-        };
+        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        processor.clients = txs;
 
         processor.process_event(vec![
             "15".to_string(),
@@ -401,13 +291,13 @@ mod tests {
         let event2 = vec!["30".to_string(), "B".to_string()];
         processor.process_event(event2.clone());
 
-        let client = rxs.remove("354").unwrap();
-        let mut received_events = client.take(2).collect().wait().unwrap().into_iter();
-        let received_event1 = received_events.next().unwrap();
+        let mut client = rxs.remove("354").unwrap();
+
+        let received_event1 = block_on(client.next()).unwrap();
 
         assert_eq!(event1, received_event1);
 
-        let received_event2 = received_events.next().unwrap();
+        let received_event2 = block_on(client.next()).unwrap();
         assert_eq!(event2, received_event2);
     }
 }

@@ -1,24 +1,15 @@
-use bytes::{Buf, Bytes};
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::try_ready;
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::compat::AsyncWrite01CompatExt;
+use futures::prelude::AsyncWriteExt;
+use futures::StreamExt;
 use log::debug;
-use std::io::Cursor;
-use tokio::io::{AsyncWrite, WriteHalf};
+use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
-use tokio::prelude::{Async, Future, Poll, Stream};
-
-enum State {
-    // waiting for events
-    Waiting,
-    // writing event on socket to client
-    Writing(Vec<String>, Cursor<Bytes>),
-}
 
 pub struct Client {
     id: String,
     socket: WriteHalf<TcpStream>,
     rx: UnboundedReceiver<Vec<String>>,
-    state: State,
 }
 
 impl Client {
@@ -27,49 +18,22 @@ impl Client {
         socket: WriteHalf<TcpStream>,
         rx: UnboundedReceiver<Vec<String>>,
     ) -> Client {
-        Client {
-            id,
-            socket,
-            rx,
-            state: State::Waiting,
-        }
+        Client { id, socket, rx }
     }
-}
 
-impl Future for Client {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        loop {
-            match self.state {
-                State::Waiting => match try_ready!(self.rx.poll()) {
-                    Some(event) => {
-                        let event_str = event.join("|") + "\n";
-                        let data = Cursor::new(Bytes::from(event_str));
-                        self.state = State::Writing(event, data);
-                    }
-                    None => return Ok(Async::Ready(())),
-                },
-                State::Writing(ref event, ref mut data) => {
-                    while data.has_remaining() {
-                        let id = &self.id;
-                        let result = self.socket.write_buf(data).unwrap_or_else(|err| {
-                            panic!(
-                                "error sending event {} to client {}, {}",
-                                event.join("|"),
-                                &id,
-                                err
-                            )
-                        });
-                        if let Async::NotReady = result {
-                            return Ok(Async::NotReady);
-                        }
-                    }
-                    debug!("delievered event {} to client {}", event.join("|"), self.id);
-                    self.state = State::Waiting;
-                }
+    pub async fn run(mut self) {
+        let mut socket = self.socket.compat();
+        while let Some(event) = await!(self.rx.next()) {
+            let event_str = event.join("|") + "\n";
+            if let Err(err) = await!(socket.write_all(event_str.as_bytes())) {
+                panic!(
+                    "error sending event {} to client {}, {}",
+                    event.join("|"),
+                    self.id,
+                    err
+                )
             }
+            debug!("delievered event {} to client {}", event.join("|"), self.id);
         }
     }
 }
@@ -77,55 +41,38 @@ impl Future for Client {
 #[cfg(test)]
 mod tests {
     use super::Client;
-    use futures::sync::mpsc::unbounded;
-    use futures::Future;
-    use std::io::BufReader;
+    use futures::channel::mpsc::unbounded;
+    use futures::compat::{Future01CompatExt, Stream01CompatExt};
+    use futures::StreamExt;
+    use tokio::codec::{FramedRead, LinesCodec};
     use tokio::io::AsyncRead;
     use tokio::net::{TcpListener, TcpStream};
-    use tokio::prelude::Stream;
-    use tokio::runtime::Runtime;
 
-    #[test]
-    fn client_socket_receives_client_events() {
-        env_logger::init();
-        let mut rt = Runtime::new().unwrap();
+    #[runtime::test(runtime_tokio::Tokio)]
+    async fn client_socket_receives_client_events() {
         let addr = "127.0.0.1:0".parse().unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
         let stream = TcpStream::connect(&listener.local_addr().unwrap());
 
-        let incoming = listener
-            .incoming()
-            .into_future()
-            .and_then(move |(socket, _rest)| {
-                let (_, writer) = socket.unwrap().split();
-                let (tx, rx) = unbounded();
+        await!(async {
+            let (tx, rx) = unbounded();
+
+            runtime::spawn(async {
+                let mut incoming = listener.incoming().compat();
+                let socket = await!(incoming.next()).unwrap().unwrap();
+                let (_, writer) = socket.split();
                 let client = Client::new("132".to_string(), writer, rx);
-                tokio::spawn(client);
-                let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
-
-                tx.unbounded_send(event).unwrap();
-                Ok(())
-            })
-            .map_err(|err| {
-                panic!("{:?}", err);
+                runtime::spawn(client.run());
             });
 
-        rt.spawn(incoming);
-
-        let test = stream
-            .and_then(move |socket| {
-                let event_bytes = vec![];
-                tokio::io::read_until(BufReader::new(socket), b'\n', event_bytes).and_then(
-                    |(_socket, output)| {
-                        let output = String::from_utf8(output).unwrap();
-                        assert_eq!(output, "911|P|46|68\n");
-                        Ok(())
-                    },
-                )
-            })
-            .map_err(|err| {
-                panic!("{:?}", err);
-            });
-        rt.block_on(test).unwrap();
+            let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
+            tx.unbounded_send(event).unwrap();
+            let stream = await!(stream.compat()).unwrap();
+            let (reader, _) = stream.split();
+            let mut lines = FramedRead::new(reader, LinesCodec::new()).compat();
+            let event = await!(lines.next()).unwrap().unwrap();
+            assert_eq!(event, "911|P|46|68");
+            assert!(true);
+        });
     }
 }

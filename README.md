@@ -21,3 +21,7 @@ This implementation is compatible with both v1 and v2.
 ### instructions 
 1. start the solution with ` cargo run --release`
 2. run the desired version with either `./followermaze-v1.sh` or `./followermaze-v2.sh`
+
+
+### notes
+for the async/await version check the [async-await branch](https://github.com/jxs/follower-maze.rs/tree/async-await)

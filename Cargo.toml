@@ -11,7 +11,6 @@ path = "src/lib/mod.rs"
 [dependencies]
 # tokio = {version = "0.1", features = ["async-await-preview"]}
 tokio = "0.1.18"
-futures01 = { package = "futures", version = "0.1"}
 log = "0.4.2"
 env_logger = "0.5.10"
 bytes = "0.4.12"

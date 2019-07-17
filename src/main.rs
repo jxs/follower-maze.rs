@@ -1,11 +1,14 @@
+#![feature(await_macro, async_await)]
+
 use failure::Error;
-use futures::sync::mpsc::channel;
+use futures::future;
 use log::info;
-use tokio::prelude::future::lazy;
+use tokio::sync::mpsc::channel;
 
 use followermaze::events::{Processor, Streamer};
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     env_logger::init();
 
     let (tx, rx) = channel(5);
@@ -16,11 +19,7 @@ fn main() -> Result<(), Error> {
     let processor =
         Processor::new("127.0.0.1:9099", rx).expect("could not create events processor");
 
-    tokio::run(lazy(move || {
-        tokio::spawn(streamer);
-        tokio::spawn(processor);
-        Ok(())
-    }));
+    future::join(streamer.run(), processor.run()).await;
 
     Ok(())
 }

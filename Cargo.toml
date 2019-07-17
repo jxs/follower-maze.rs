@@ -9,16 +9,12 @@ name = "followermaze"
 path = "src/lib/mod.rs"
 
 [dependencies]
-# tokio = {version = "0.1", features = ["async-await-preview"]}
-tokio = "0.1.18"
+tokio = {git = "https://github.com/tokio-rs/tokio.git", rev = "a18ddb3b616b8c4c910fc927f6d72272319675c2"}
 log = "0.4.2"
 env_logger = "0.5.10"
 bytes = "0.4.12"
 failure = "0.1.5"
-futures-preview = { version = "0.3.0-alpha.14", features = ["io-compat"] }
-runtime = {git = "https://github.com/rustasync/runtime.git", rev ="af30afed72555a34432d29476f8cbfd7337b2e98"}
-runtime-tokio = {git = "https://github.com/rustasync/runtime.git", rev="af30afed72555a34432d29476f8cbfd7337b2e98"}
-runtime-raw = {git = "https://github.com/rustasync/runtime.git", rev="af30afed72555a34432d29476f8cbfd7337b2e98"}
+futures-preview = {version = "0.3.0-alpha.17", features = ["nightly", "async-await"]}
 
 
 

@@ -1,8 +1,5 @@
 use bytes::BytesMut;
 use failure::Error;
-use futures::channel::mpsc::Sender;
-use futures::compat::Stream01CompatExt;
-use futures::SinkExt;
 use futures::StreamExt;
 use log::debug;
 use std::collections::HashMap;
@@ -10,8 +7,8 @@ use std::default::Default;
 use std::io::{Error as IoError, ErrorKind};
 use std::string::ToString;
 use tokio::codec::{Decoder, FramedRead, LinesCodec};
-use tokio::io::AsyncRead;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Sender;
 
 pub struct EventsDecoder {
     lines: LinesCodec,
@@ -83,25 +80,20 @@ impl Streamer {
     pub fn new(addr: &str, tx: Sender<Vec<String>>) -> Result<Streamer, Error> {
         let addr = addr.parse()?;
         let socket = TcpListener::bind(&addr)?;
-        Ok(Streamer {
-            tx: tx,
-            socket,
-        })
+        Ok(Streamer { tx: tx, socket })
     }
 
     pub async fn run(mut self) {
-        let mut incoming = self.socket.incoming().compat();
-        let mut reader = match await!(incoming.next()) {
-            Some(Ok(reader)) => {
-                FramedRead::new(reader.split().0, EventsDecoder::default()).compat()
-            }
+        let mut incoming = self.socket.incoming();
+        let mut reader = match incoming.next().await {
+            Some(Ok(reader)) => FramedRead::new(reader.split().0, EventsDecoder::default()),
             Some(Err(err)) => panic!("error reading streamer socket, {}", err),
             None => unreachable!(),
         };
         debug!("events streamer socket connect!");
         loop {
-            if let Some(Ok(event)) = await!(reader.next()) {
-                if let Err(err) = await!(self.tx.send(event.clone())) {
+            if let Some(Ok(event)) = reader.next().await {
+                if let Err(err) = self.tx.send(event.clone()).await {
                     panic!("error reading events from streamer socket, {}", err);
                 }
                 debug!("send event {} to processor!", event.join("|"));

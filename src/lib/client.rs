@@ -1,31 +1,28 @@
-use futures::channel::mpsc::UnboundedReceiver;
-use futures::compat::AsyncWrite01CompatExt;
-use futures::prelude::AsyncWriteExt;
 use futures::StreamExt;
 use log::debug;
-use tokio::io::WriteHalf;
-use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::split::TcpStreamWriteHalf;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 pub struct Client {
     id: String,
-    socket: WriteHalf<TcpStream>,
+    socket: TcpStreamWriteHalf,
     rx: UnboundedReceiver<Vec<String>>,
 }
 
 impl Client {
     pub fn new(
         id: String,
-        socket: WriteHalf<TcpStream>,
+        socket: TcpStreamWriteHalf,
         rx: UnboundedReceiver<Vec<String>>,
     ) -> Client {
         Client { id, socket, rx }
     }
 
     pub async fn run(mut self) {
-        let mut socket = self.socket.compat();
-        while let Some(event) = await!(self.rx.next()) {
+        while let Some(event) = self.rx.next().await {
             let event_str = event.join("|") + "\n";
-            if let Err(err) = await!(socket.write_all(event_str.as_bytes())) {
+            if let Err(err) = self.socket.write_all(event_str.as_bytes()).await {
                 panic!(
                     "error sending event {} to client {}, {}",
                     event.join("|"),
@@ -41,38 +38,37 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::Client;
-    use futures::channel::mpsc::unbounded;
-    use futures::compat::{Future01CompatExt, Stream01CompatExt};
-    use futures::StreamExt;
+    use futures::{StreamExt, SinkExt};
     use tokio::codec::{FramedRead, LinesCodec};
-    use tokio::io::AsyncRead;
     use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::mpsc::unbounded_channel;
 
-    #[runtime::test(runtime_tokio::Tokio)]
+    #[tokio::test]
     async fn client_socket_receives_client_events() {
         let addr = "127.0.0.1:0".parse().unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
         let stream = TcpStream::connect(&listener.local_addr().unwrap());
 
-        await!(async {
-            let (tx, rx) = unbounded();
+        async {
+            let (mut tx, rx) = unbounded_channel();
 
-            runtime::spawn(async {
-                let mut incoming = listener.incoming().compat();
-                let socket = await!(incoming.next()).unwrap().unwrap();
+            tokio::spawn(async {
+                let mut incoming = listener.incoming();
+                let socket = incoming.next().await.unwrap().unwrap();
                 let (_, writer) = socket.split();
                 let client = Client::new("132".to_string(), writer, rx);
-                runtime::spawn(client.run());
+                tokio::spawn(client.run());
             });
 
             let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
-            tx.unbounded_send(event).unwrap();
-            let stream = await!(stream.compat()).unwrap();
+            tx.send(event).await.unwrap();
+            let stream = stream.await.unwrap();
             let (reader, _) = stream.split();
-            let mut lines = FramedRead::new(reader, LinesCodec::new()).compat();
-            let event = await!(lines.next()).unwrap().unwrap();
+            let mut lines = FramedRead::new(reader, LinesCodec::new());
+            let event = lines.next().await.unwrap().unwrap();
             assert_eq!(event, "911|P|46|68");
             assert!(true);
-        });
+        }
+            .await;
     }
 }

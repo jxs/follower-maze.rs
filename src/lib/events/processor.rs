@@ -1,5 +1,5 @@
 use crate::client::Client;
-use failure::Error;
+use anyhow::Error;
 use futures::{select, FutureExt, StreamExt, SinkExt};
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
@@ -15,13 +15,12 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn new(addr: &str, events_stream: Receiver<Vec<String>>) -> Result<Processor, Error> {
-        let addr = addr.parse()?;
+    pub async fn new(addr: &str, events_stream: Receiver<Vec<String>>) -> Result<Processor, Error> {
         Ok(Processor {
             followers: HashMap::new(),
             events_stream,
             clients: HashMap::new(),
-            listener: Some(TcpListener::bind(&addr)?),
+            listener: Some(TcpListener::bind(&addr).await?),
         })
     }
 
@@ -42,7 +41,7 @@ impl Processor {
                             None => panic!("error reading id from client socket, disconected early"),
                         };
                         let (tx, rx) = unbounded_channel();
-                        let client = Client::new(id.clone(), writer, rx);
+                        let client = Client::new(id.clone(), client_socket, rx);
                         tokio::spawn(client.run());
                         self.clients.insert(id.clone(), tx);
                         debug!("processor inserted client {}", id);
@@ -210,7 +209,7 @@ mod tests {
     async fn processor_sends_broadcast_event_to_all_clients() {
         let (_tx, rx) = channel(5);
         let (txs, rxs) = seed_clients();
-        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
         let event = vec!["342".to_string(), "B".to_string()];
         processor.process_event(event.clone()).await;
@@ -224,7 +223,7 @@ mod tests {
     async fn processor_sends_private_message_to_matching_client() {
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
 
         let event = vec![
@@ -243,7 +242,7 @@ mod tests {
     async fn processor_sends_status_update_message_to_matching_client_after_follow() {
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
 
         processor.process_event(vec![
@@ -263,7 +262,7 @@ mod tests {
     async fn processor_doesnt_send_status_update_message_to_matching_client_after_unfollow() {
         let (_tx, rx) = channel(5);
         let (txs, mut rxs) = seed_clients();
-        let mut processor = Processor::new("127.0.0.1:0", rx).unwrap();
+        let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
 
         processor.process_event(vec![

@@ -1,6 +1,4 @@
-#![feature(await_macro, async_await)]
-
-use failure::Error;
+use anyhow::Error;
 use futures::future;
 use log::info;
 use tokio::sync::mpsc::channel;
@@ -15,9 +13,9 @@ async fn main() -> Result<(), Error> {
 
     info!("Starting Follower Maze");
 
-    let streamer = Streamer::new("127.0.0.1:9090", tx).expect("could not create events streamer");
+    let streamer = Streamer::new("127.0.0.1:9090", tx).await.expect("could not create events streamer");
     let processor =
-        Processor::new("127.0.0.1:9099", rx).expect("could not create events processor");
+        Processor::new("127.0.0.1:9099", rx).await.expect("could not create events processor");
 
     future::join(streamer.run(), processor.run()).await;
 

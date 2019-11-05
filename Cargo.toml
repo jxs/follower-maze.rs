@@ -9,14 +9,9 @@ name = "followermaze"
 path = "src/lib/mod.rs"
 
 [dependencies]
-tokio = {git = "https://github.com/tokio-rs/tokio.git", rev = "a18ddb3b616b8c4c910fc927f6d72272319675c2"}
+tokio = "0.2.0-alpha.6"
 log = "0.4.2"
 env_logger = "0.5.10"
 bytes = "0.4.12"
-failure = "0.1.5"
-futures-preview = {version = "0.3.0-alpha.17", features = ["nightly", "async-await"]}
-
-
-
-[profile.release]
-debug = true
+futures-preview = { version = "0.3.0-alpha.19", features = ["async-await"] }
+anyhow = "1.0.19"

@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use failure::Error;
+use anyhow::Error;
 use futures::StreamExt;
 use log::debug;
 use std::collections::HashMap;
@@ -77,16 +77,15 @@ pub struct Streamer {
 }
 
 impl Streamer {
-    pub fn new(addr: &str, tx: Sender<Vec<String>>) -> Result<Streamer, Error> {
-        let addr = addr.parse()?;
-        let socket = TcpListener::bind(&addr)?;
+    pub async fn new(addr: &str, tx: Sender<Vec<String>>) -> Result<Streamer, Error> {
+        let socket = TcpListener::bind(&addr).await?;
         Ok(Streamer { tx: tx, socket })
     }
 
     pub async fn run(mut self) {
         let mut incoming = self.socket.incoming();
         let mut reader = match incoming.next().await {
-            Some(Ok(reader)) => FramedRead::new(reader.split().0, EventsDecoder::default()),
+            Some(Ok(reader)) => FramedRead::new(reader, EventsDecoder::default()),
             Some(Err(err)) => panic!("error reading streamer socket, {}", err),
             None => unreachable!(),
         };

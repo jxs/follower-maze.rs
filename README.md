@@ -14,14 +14,10 @@ stream of events which may or may not require clients to be notified
 these wait for notifications for the events that are relevant to the
 user they represent
 
-A full specification is given in the `instructions-v1.md` or `instructions-v2.md`.  
+A full specification is given in the `instructions-v1.md` or `instructions-v2.md`.
 This implementation is compatible with both v1 and v2.
 
 
-### instructions 
+### instructions
 1. start the solution with ` cargo run --release`
-2. run the desired version with either `./followermaze-v1.sh` or `./followermaze-v2.sh`
-
-
-### notes
-for the async/await version check the [async-await branch](https://github.com/jxs/follower-maze.rs/tree/async-await)
+2. run `./followermaze-v2.sh`

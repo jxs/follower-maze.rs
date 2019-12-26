@@ -1,11 +1,11 @@
 use crate::client::Client;
 use anyhow::Error;
-use futures::{select, FutureExt, StreamExt, SinkExt};
+use futures::{select, FutureExt, StreamExt};
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
-use tokio::codec::{FramedRead, LinesCodec};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
+use tokio_util::codec::{FramedRead, LinesCodec};
 
 pub struct Processor {
     followers: HashMap<String, HashSet<String>>,
@@ -25,7 +25,7 @@ impl Processor {
     }
 
     pub async fn run(mut self) {
-        let listener = self.listener.take().expect("run can only be polled once");
+        let mut listener = self.listener.take().expect("run can only be polled once");
         info!("clients listener Listening for clients on",);
         let mut incoming = listener.incoming();
 
@@ -60,8 +60,12 @@ impl Processor {
     }
 
     //send the event to the client via channel
-    async fn send_event(client_id: String, client: &mut UnboundedSender<Vec<String>>, event: Vec<String>) {
-        if let Err(err) = client.send(event.clone()).await {
+    async fn send_event(
+        client_id: String,
+        client: &mut UnboundedSender<Vec<String>>,
+        event: Vec<String>,
+    ) {
+        if let Err(err) = client.send(event.clone()) {
             error!(
                 "error sending event {}, to client {}, {}",
                 event.join("|"),
@@ -175,10 +179,10 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::Processor;
-    use tokio::sync::mpsc::{channel, unbounded_channel, UnboundedReceiver, UnboundedSender};
     use futures::executor::block_on;
     use futures::StreamExt;
     use std::collections::HashMap;
+    use tokio::sync::mpsc::{channel, unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     fn seed_clients() -> (
         HashMap<String, UnboundedSender<Vec<String>>>,
@@ -245,12 +249,14 @@ mod tests {
         let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
 
-        processor.process_event(vec![
-            "15".to_string(),
-            "F".to_string(),
-            "134".to_string(),
-            "184".to_string(),
-        ]).await;
+        processor
+            .process_event(vec![
+                "15".to_string(),
+                "F".to_string(),
+                "134".to_string(),
+                "184".to_string(),
+            ])
+            .await;
         let event = vec!["18".to_string(), "S".to_string(), "184".to_string()];
         processor.process_event(event.clone()).await;
         let mut client = rxs.remove("134").unwrap();
@@ -265,24 +271,30 @@ mod tests {
         let mut processor = Processor::new("127.0.0.1:0", rx).await.unwrap();
         processor.clients = txs;
 
-        processor.process_event(vec![
-            "15".to_string(),
-            "F".to_string(),
-            "354".to_string(),
-            "184".to_string(),
-        ]).await;
+        processor
+            .process_event(vec![
+                "15".to_string(),
+                "F".to_string(),
+                "354".to_string(),
+                "184".to_string(),
+            ])
+            .await;
 
         let event1 = vec!["18".to_string(), "S".to_string(), "184".to_string()];
         processor.process_event(event1.clone()).await;
 
-        processor.process_event(vec![
-            "25".to_string(),
-            "U".to_string(),
-            "354".to_string(),
-            "184".to_string(),
-        ]).await;
+        processor
+            .process_event(vec![
+                "25".to_string(),
+                "U".to_string(),
+                "354".to_string(),
+                "184".to_string(),
+            ])
+            .await;
 
-        processor.process_event(vec!["28".to_string(), "S".to_string(), "184".to_string()]).await;
+        processor
+            .process_event(vec!["28".to_string(), "S".to_string(), "184".to_string()])
+            .await;
         let event2 = vec!["30".to_string(), "B".to_string()];
         processor.process_event(event2.clone()).await;
 

@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use log::debug;
 use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::TcpStream;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub struct Client {
@@ -11,11 +11,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
-        id: String,
-        socket: TcpStream,
-        rx: UnboundedReceiver<Vec<String>>,
-    ) -> Client {
+    pub fn new(id: String, socket: TcpStream, rx: UnboundedReceiver<Vec<String>>) -> Client {
         Client { id, socket, rx }
     }
 
@@ -38,37 +34,34 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::Client;
-    use futures::{StreamExt, SinkExt};
-    use tokio::codec::{FramedRead, LinesCodec};
+    use futures::StreamExt;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc::unbounded_channel;
+    use tokio_util::codec::{FramedRead, LinesCodec};
 
     #[tokio::test]
     async fn client_socket_receives_client_events() {
         let addr = "127.0.0.1:0";
-        let listener = TcpListener::bind(&addr).await.unwrap();
+        let mut listener = TcpListener::bind(&addr).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(&addr);
 
-        async {
-            let (mut tx, rx) = unbounded_channel();
+        let (tx, rx) = unbounded_channel();
 
-            tokio::spawn(async {
-                let mut incoming = listener.incoming();
-                let socket = incoming.next().await.unwrap().unwrap();
-                let client = Client::new("132".to_string(), socket, rx);
-                tokio::spawn(client.run());
-            });
+        tokio::spawn(async move {
+            let mut incoming = listener.incoming();
+            let socket = incoming.next().await.unwrap().unwrap();
+            let client = Client::new("132".to_string(), socket, rx);
+            tokio::spawn(client.run());
+        });
 
-            let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
-            tx.send(event).await.unwrap();
-            let mut stream = stream.await.unwrap();
-            let (reader, _) = stream.split();
-            let mut lines = FramedRead::new(reader, LinesCodec::new());
-            let event = lines.next().await.unwrap().unwrap();
-            assert_eq!(event, "911|P|46|68");
-            assert!(true);
-        }
-            .await;
+        let event = "911|P|46|68".split("|").map(|x| x.to_string()).collect();
+        tx.send(event).unwrap();
+        let mut stream = stream.await.unwrap();
+        let (reader, _) = stream.split();
+        let mut lines = FramedRead::new(reader, LinesCodec::new());
+        let event = lines.next().await.unwrap().unwrap();
+        assert_eq!(event, "911|P|46|68");
+        assert!(true);
     }
 }

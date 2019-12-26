@@ -9,9 +9,10 @@ name = "followermaze"
 path = "src/lib/mod.rs"
 
 [dependencies]
-tokio = "0.2.0-alpha.6"
+tokio = { version = "0.2.6", features = ["full"] }
 log = "0.4.2"
-env_logger = "0.5.10"
-bytes = "0.4.12"
-futures-preview = { version = "0.3.0-alpha.19", features = ["async-await"] }
+env_logger = "0.7.1"
+bytes = "0.5.3"
+futures = "0.3.1"
 anyhow = "1.0.19"
+tokio-util = { version = "0.2.0", features = ["codec"] }

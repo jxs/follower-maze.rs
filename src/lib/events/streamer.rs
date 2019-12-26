@@ -1,14 +1,14 @@
-use bytes::BytesMut;
 use anyhow::Error;
+use bytes::BytesMut;
 use futures::StreamExt;
 use log::debug;
 use std::collections::HashMap;
 use std::default::Default;
 use std::io::{Error as IoError, ErrorKind};
 use std::string::ToString;
-use tokio::codec::{Decoder, FramedRead, LinesCodec};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
+use tokio_util::codec::{Decoder, FramedRead, LinesCodec};
 
 pub struct EventsDecoder {
     lines: LinesCodec,
@@ -105,7 +105,7 @@ impl Streamer {
 mod tests {
     use super::EventsDecoder;
     use bytes::BytesMut;
-    use tokio::codec::Decoder;
+    use tokio_util::codec::Decoder;
 
     #[test]
     fn decoder_sorts_events_by_order() {

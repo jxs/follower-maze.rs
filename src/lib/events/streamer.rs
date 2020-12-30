@@ -47,7 +47,7 @@ impl Decoder for EventsDecoder {
             }
         };
 
-        self.events_queue.insert(seq, pevent.clone());
+        self.events_queue.insert(seq, pevent);
         if let Some(pevent) = self.events_queue.remove(&self.state) {
             self.state += 1;
             return Ok(Some(pevent));
@@ -79,15 +79,13 @@ pub struct Streamer {
 impl Streamer {
     pub async fn new(addr: &str, tx: Sender<Vec<String>>) -> Result<Streamer, Error> {
         let socket = TcpListener::bind(&addr).await?;
-        Ok(Streamer { tx: tx, socket })
+        Ok(Streamer { tx, socket })
     }
 
-    pub async fn run(mut self) {
-        let mut incoming = self.socket.incoming();
-        let mut reader = match incoming.next().await {
-            Some(Ok(reader)) => FramedRead::new(reader, EventsDecoder::default()),
-            Some(Err(err)) => panic!("error reading streamer socket, {}", err),
-            None => unreachable!(),
+    pub async fn run(self) {
+        let mut reader = match self.socket.accept().await {
+            Ok((reader, _addr)) => FramedRead::new(reader, EventsDecoder::default()),
+            Err(err) => panic!("error reading streamer socket, {}", err),
         };
         debug!("events streamer socket connect!");
         loop {

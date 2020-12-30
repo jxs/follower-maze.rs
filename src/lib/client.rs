@@ -1,4 +1,3 @@
-use futures::StreamExt;
 use log::debug;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -16,7 +15,7 @@ impl Client {
     }
 
     pub async fn run(mut self) {
-        while let Some(event) = self.rx.next().await {
+        while let Some(event) = self.rx.recv().await {
             let event_str = event.join("|") + "\n";
             if let Err(err) = self.socket.write_all(event_str.as_bytes()).await {
                 panic!(
@@ -42,15 +41,14 @@ mod tests {
     #[tokio::test]
     async fn client_socket_receives_client_events() {
         let addr = "127.0.0.1:0";
-        let mut listener = TcpListener::bind(&addr).await.unwrap();
+        let listener = TcpListener::bind(&addr).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(&addr);
 
         let (tx, rx) = unbounded_channel();
 
         tokio::spawn(async move {
-            let mut incoming = listener.incoming();
-            let socket = incoming.next().await.unwrap().unwrap();
+            let (socket, _addr) = listener.accept().await.unwrap();
             let client = Client::new("132".to_string(), socket, rx);
             tokio::spawn(client.run());
         });

@@ -1,6 +1,6 @@
 use crate::client::Client;
 use anyhow::Error;
-use futures::{select, FutureExt, StreamExt};
+use futures::StreamExt;
 use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
 use tokio::net::TcpListener;
@@ -25,37 +25,35 @@ impl Processor {
     }
 
     pub async fn run(mut self) {
-        let mut listener = self.listener.take().expect("run can only be polled once");
+        let listener = self.listener.take().expect("run can only be polled once");
         info!("clients listener Listening for clients on",);
-        let mut incoming = listener.incoming();
 
         loop {
-            select!(
-                mut client_socket_f = incoming.next().fuse() => match client_socket_f {
-                    Some(Ok(mut client_socket)) => {
-                        let (reader, writer) = client_socket.split();
+            tokio::select! {
+                client_socket_f = listener.accept() => match client_socket_f {
+                    Ok((mut client_socket, _addr)) => {
+                        let (reader, _writer) = client_socket.split();
                         let mut lines = FramedRead::new(reader, LinesCodec::new());
                         let id = match lines.next().await {
                             Some(Ok(id)) => id,
-                            Some(Err(err)) => panic!("error reading id from client socket, {}", err),
-                            None => panic!("error reading id from client socket, disconected early"),
+                            Some(Err(err)) => panic!("error reading id from client socket: {}", err),
+                            None => panic!("error reading id from client socket: client disconected early")
                         };
                         let (tx, rx) = unbounded_channel();
                         let client = Client::new(id.clone(), client_socket, rx);
                         tokio::spawn(client.run());
                         self.clients.insert(id.clone(), tx);
                         debug!("processor inserted client {}", id);
-                    },
-                    Some(Err(err)) => panic!("error reading client from socket, {}", err),
-                    None => unreachable!()
+                    }
+                    Err(err) => panic!("error reading client from socket: {}", err)
                 },
-                event = self.events_stream.next().fuse() => match event {
+                event = self.events_stream.recv() => match event {
                     Some(event) => {
-                        self.process_event(event).await
+                        self.process_event(event).await;
                     },
                     None => return
-                },
-            );
+                }
+            }
         }
     }
 
@@ -144,7 +142,7 @@ impl Processor {
                     Some(followers) => followers,
                     None => {
                         debug!(
-                            "events handler skipping sending event {}, client:{} not found",
+                            "events handler skipping sending event {}: client {} not found",
                             event_str, client_id
                         );
                         return;
@@ -179,8 +177,6 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::Processor;
-    use futures::executor::block_on;
-    use futures::StreamExt;
     use std::collections::HashMap;
     use tokio::sync::mpsc::{channel, unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -218,7 +214,7 @@ mod tests {
         let event = vec!["342".to_string(), "B".to_string()];
         processor.process_event(event.clone()).await;
         for (_client_id, mut client) in rxs.into_iter() {
-            let received_event = block_on(client.next());
+            let received_event = client.recv().await;
             assert_eq!(event, received_event.unwrap());
         }
     }
@@ -238,7 +234,7 @@ mod tests {
         ];
         processor.process_event(event.clone()).await;
         let mut client = rxs.remove("274").unwrap();
-        let received_event = block_on(client.next());
+        let received_event = client.recv().await;
         assert_eq!(event, received_event.unwrap());
     }
 
@@ -260,7 +256,7 @@ mod tests {
         let event = vec!["18".to_string(), "S".to_string(), "184".to_string()];
         processor.process_event(event.clone()).await;
         let mut client = rxs.remove("134").unwrap();
-        let received_event = block_on(client.next());
+        let received_event = client.recv().await;
         assert_eq!(event, received_event.unwrap());
     }
 
@@ -300,11 +296,11 @@ mod tests {
 
         let mut client = rxs.remove("354").unwrap();
 
-        let received_event1 = block_on(client.next()).unwrap();
+        let received_event1 = client.recv().await.unwrap();
 
         assert_eq!(event1, received_event1);
 
-        let received_event2 = block_on(client.next()).unwrap();
+        let received_event2 = client.recv().await.unwrap();
         assert_eq!(event2, received_event2);
     }
 }

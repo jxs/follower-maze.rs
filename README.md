@@ -1,5 +1,5 @@
 # Follower maze challenge using rust
-![Build Status](https://github.com/jxs/follower-maze.rs/workflows/.github/workflows/main.yml/badge.svg)
+[![Actions Status](https://github.com/jxs/follower-maze.rs/workflows/CI/badge.svg)](https://github.com/jxs/follower-maze.rs/actions)
 
 The challenge solved here is to build a system which acts as a socket
 server, reading events from an *event source* and forwarding them when

@@ -1,8 +1,0 @@
-language: rust
-rust:
-  - stable
-before_install:
-  - rustup component add rustfmt
-script:
-  - cargo test --all
-  - cargo fmt --all -- --check

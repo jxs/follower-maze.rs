@@ -1,5 +1,5 @@
 # Follower maze challenge using rust
-[![Build Status](https://travis-ci.org/jxs/follower-maze-rust.svg?branch=master)](https://travis-ci.org/jxs/follower-maze-rust)
+![Build Status](https://github.com/jxs/follower-maze.rs/workflows/.github/workflows/main.yml/badge.svg)
 
 The challenge solved here is to build a system which acts as a socket
 server, reading events from an *event source* and forwarding them when
@@ -17,6 +17,8 @@ user they represent
 A full specification is given in the `instructions-v1.md` or `instructions-v2.md`.
 This implementation is compatible with both v1 and v2.
 
+This project was first implemented with `tokio` 0.1 and `futures` 0.1 evolving with them to `std::futures` and `tokio` 1.0.\
+You can navigate through the commit history to see it's evolution
 
 ### instructions
 1. start the solution with ` cargo run --release`
